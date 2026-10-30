@@ -1,0 +1,15 @@
+# BPJS Data Sampel must never be committed (integrity pact)
+*.dta
+data/
+
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+web/dist/
+*.db
+.DS_Store
+
+# AI Agent
+CLAUDE.md
+AGENTS.md
