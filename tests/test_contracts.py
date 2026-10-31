@@ -80,11 +80,15 @@ def test_populations_follow_targets_v2():
     bypass = grouped("I-1-07-I", procedure="96.72#36.10", ventilator_hour=110)
     neonate = grouped("P-8-07-I")
     diabetes = grouped("J-1-20-II", diagnosa="E11.9", procedure="96.71", ventilator_hour=30)
+    craniotomy_moved = grouped("J-1-02-II", diagnosa="I61.9", procedure="96.72#01.24", ventilator_hour=120)
+    fake_sepsis = grouped("J-1-20-III", diagnosa="J96.0#A41.9", procedure="96.71", ventilator_hour=60)
 
     assert all(in_line_population(c) for c in (medical, intubation_only, craniotomy, bypass))
     assert not in_line_population(neonate)
     assert is_eligible_fictitious(medical) and not is_eligible_fictitious(craniotomy)
     assert not is_eligible_fictitious(diabetes)
+    assert not is_eligible_fictitious(craniotomy_moved)
+    assert is_eligible_fictitious(fake_sepsis) == is_eligible_fictitious(medical)
     assert is_eligible_prolonged(craniotomy) and not is_eligible_prolonged(bypass)
     assert not is_eligible_prolonged(intubation_only)
 

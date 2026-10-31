@@ -1,5 +1,4 @@
-# Claim field names follow E-Klaim `set_claim_data`, checked against halimkun/laravel-eklaim-api v1.0.6
-# but NOT against the official Kemenkes guide. If the official names differ, map them in an adapter.
+# Field names follow E-Klaim set_claim_data as in halimkun/laravel-eklaim-api v1.0.6, not yet the official guide (adapter if they differ).
 
 import hashlib
 import json
@@ -18,12 +17,7 @@ TRIGGER_CODES = VENTILATION_CODES | {"96.04"}
 LINE_GROUPS = frozenset({"J-1-20", "J-1-02", "J-1-01"})
 NEONATAL_PREFIX = "P-8"
 
-# Primary diagnoses (ICD-10, 3 characters) that define eligible claims for the fictitious mode and the
-# T22 population. They are a proxy for an ICU stay, not a definitive ICU marker: pneumonia (J18), heart
-# failure (I50), stroke (I63) and pleural effusion (J90) are often treated on wards too.
-# Source: Data Sampel Reguler, the 13 most common critical-care codes, ~46% of medical ventilation-line
-# claims. The other ~54% stay outside AI 1's "claimed vs expected" count, but remain in the ventilation-line
-# population (defined by group and code), so AI 2 and the audit agent still see them.
+# Data Sampel-based proxy for an ICU stay, not a definitive marker; the other ~54% of medical line claims stay visible to AI 2 and the audit agent.
 TARGET_DIAGNOSES: dict[str, tuple[str, ...]] = {
     "gagal napas dan pneumonia": ("J96", "J18", "J80", "J90"),
     "stroke dan perdarahan otak": ("I63", "I61", "I64", "G93"),
@@ -33,15 +27,13 @@ TARGET_DIAGNOSES: dict[str, tuple[str, ...]] = {
 }
 TARGET_DIAGNOSIS_CODES = frozenset(c for codes in TARGET_DIAGNOSES.values() for c in codes)
 
-# Reported next to T22 only, to show how much the population choice moves the AUC: the 19 most common
-# primary diagnoses of medical ventilation-line claims (~59%), option A.
+# Option A, reported next to T22 only to show how much the population choice moves the AUC.
 TARGET_DIAGNOSES_BROAD = (
     "J96", "J18", "I63", "I61", "N18", "I21", "E11", "S06", "A16", "J80",
     "I50", "I69", "I64", "A41", "I13", "G93", "I12", "J90", "R57",
 )
 
-# Major surgery groups: 9 groups, 80% of surgical ventilation-line claims in Data Sampel.
-# The generator creates surgical patients from these groups only.
+# 80% of surgical ventilation-line claims in Data Sampel; the generator draws surgical patients only from these.
 MAJOR_SURGERY_GROUPS: dict[str, str] = {
     "G-1-10": "Kraniotomi",
     "K-1-20": "Prosedur intestinal kompleks",
@@ -54,10 +46,13 @@ MAJOR_SURGERY_GROUPS: dict[str, str] = {
     "I-1-06": "Prosedur kardiotorasik lain",
 }
 
-# Cardiac groups that stay in their own group when ventilation passes 96 hours (Data Sampel). They are
-# excluded from the denominator of the prolonged mode.
-# Assumption (TARGETS v2, F9): G-1-01 also stayed in Data Sampel, but with fewer than 5 claims, too few to
-# make a rule from; it could be chance. G-1-01 is not a major surgery group, so the generator never creates it.
+# Checked alongside the group, because a surgical patient moved to J-1-02 by 96.72 keeps this code (one per group, TARGETS v2 F9).
+MAJOR_SURGERY_CODES: dict[str, str] = {
+    "36.13": "I-1-07", "35.24": "I-1-04", "34.02": "I-1-06", "01.24": "G-1-10", "02.34": "G-1-11",
+    "46.20": "K-1-20", "54.11": "K-1-40", "38.95": "N-1-12", "81.05": "M-1-03",
+}
+
+# They stay put past 96 hours in Data Sampel; G-1-01 also did but with under 5 claims, so it is treated as chance (F9).
 CARDIAC_GROUPS_NOT_MOVING = frozenset({"I-1-07", "I-1-04"})
 
 DischargeStatus = Literal[1, 2, 3, 4, 5]  # 1 doctor's approval, 2 referred, 3 own request, 4 died, 5 other
@@ -202,10 +197,12 @@ def in_line_population(claim: GroupedClaim) -> bool:
 
 
 def is_eligible_fictitious(claim: GroupedClaim) -> bool:
+    # Only the primary diagnosis counts, so a fake secondary diagnosis (e.g. A41.9) never changes membership.
     return (
         claim.icu_indikator == 1
         and claim.primary_dx3 in TARGET_DIAGNOSIS_CODES
         and claim.group not in MAJOR_SURGERY_GROUPS
+        and not set(claim.procedures) & set(MAJOR_SURGERY_CODES)
         and not claim.cbg.startswith(NEONATAL_PREFIX)
     )
 
