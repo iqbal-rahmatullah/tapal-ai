@@ -46,3 +46,16 @@ def test_engines_hold_no_vocabulary_of_the_held_out_style():
                 if found:
                     hits[str(rel)] = sorted(found)
     assert not hits
+
+
+def test_engines_never_point_at_the_blind_test_data():
+    # Until task 720 only the generator and the gatekeeper engine/data.py may name data/test or data/sealed.
+    hits = []
+    for base in ("engine", "api"):
+        for f in (ROOT / base).rglob("*"):
+            rel = f.relative_to(ROOT)
+            if f.is_file() and "synth" not in rel.parts and rel.as_posix() != "engine/data.py" and (f.suffix == ".py" or f.suffix in TEXT_SUFFIXES):
+                text = scanned_text(f)
+                if "sealed" in text or re.search(r"\btest\b", text):
+                    hits.append(str(rel))
+    assert not hits

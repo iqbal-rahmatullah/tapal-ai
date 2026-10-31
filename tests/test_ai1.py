@@ -1,0 +1,115 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from engine import ai1 as A
+from engine import stats as S
+from engine.contracts import TRIGGER_CODES, GroupedClaim, is_eligible_fictitious, is_eligible_prolonged, split_codes
+from engine.data import ROOT, BlindTestError, load_world
+from engine.synth.world import CALIBRATION_DIR
+
+needs_world = pytest.mark.skipif(not (CALIBRATION_DIR / "data_sampel.json").exists(), reason="kalibrasi lokal belum dibuat")
+
+
+@pytest.fixture(scope="module")
+def small():
+    from engine.synth.world import WorldParams, build_world
+    h, s = build_world(WorldParams(seed=3, scale=0.1))
+    return h, s
+
+
+@needs_world
+def test_features_ignore_forbidden_columns_and_trigger_codes(small):
+    h, s = small
+    vocab = A.fit_vocab(A.evidence(s, h))
+    base = A.features(A.evidence(s, h), vocab)
+    rng = np.random.default_rng(0)
+    scrambled = s.assign(
+        ventilator_hour=rng.integers(0, 500, len(s)), ventilator_use_ind=rng.integers(0, 2, len(s)),
+        cbg=rng.permutation(s.cbg.to_numpy()), tarif_ina_cbg=rng.permutation(s.tarif_ina_cbg.to_numpy()),
+        nomor_sep="X", discharge_status=rng.permutation(s.discharge_status.to_numpy()),
+        procedure=s.procedure.map(lambda p: "#".join(c for c in split_codes(p) if c not in TRIGGER_CODES)))
+    pd.testing.assert_frame_equal(base, A.features(A.evidence(scrambled, h), vocab))
+    assert not set(vocab.procedures) & TRIGGER_CODES
+    assert not {c for c in base.columns for f in A.FORBIDDEN if f in c} and "discharge_status" not in base.columns
+
+
+
+@needs_world
+def test_vectorised_populations_match_the_contracts(small):
+    from engine.synth.checks import _claim_record
+    _, s = small
+    claims = [GroupedClaim.model_validate(_claim_record(r)) for _, r in s.iterrows()]
+    np.testing.assert_array_equal(A.eligible_fictitious(s), [is_eligible_fictitious(c) for c in claims])
+    np.testing.assert_array_equal(A.eligible_prolonged(s), [is_eligible_prolonged(c) for c in claims])
+
+def test_per_rs_test_flags_the_hospital_with_excess_codes():
+    rng = np.random.default_rng(1)
+    rs = pd.Series(np.repeat([f"RS-{i:03d}" for i in range(40)], 100))
+    p = np.full(len(rs), 0.3)
+    y = (rng.random(len(rs)) < 0.3).astype(int)
+    y[:100] = (rng.random(100) < 0.7)
+    n_layak = pd.Series(100, index=sorted(rs.unique()))
+    t = S.per_rs_test(rs, y, p, np.ones(len(rs), bool), n_layak)
+    assert t.ditandai["RS-000"] and t.ditandai.sum() <= 2
+
+
+
+def test_calibration_tames_overconfident_tails():
+    rng = np.random.default_rng(0)
+    true = rng.uniform(0.001, 0.05, 20_000)
+    y = (rng.random(len(true)) < true).astype(int)
+    raw = true / 20
+    q = A.calibrate(raw, y, np.repeat(np.arange(100), 200), np.ones(len(y), bool))
+    assert raw.sum() / y.sum() < 0.1 and abs(q.sum() / y.sum() - 1) < 0.1
+
+
+def test_single_feature_scan_catches_a_label_copy():
+    rng = np.random.default_rng(0)
+    y = (rng.random(3000) < 0.1).astype(int)
+    X = pd.DataFrame({"salinan": y.astype(float), "acak": rng.random(3000),
+                      "kategori": pd.Categorical(np.where(y == 1, "v", rng.choice(["a", "b"], 3000)))})
+    auc = A.single_feature_auc(X, y, np.repeat(np.arange(30), 100))
+    assert auc["salinan"] == 1.0 and auc["kategori"] > 0.95 and auc["acak"] < 0.6
+
+
+def test_exact_z_is_the_binomial_mid_p():
+    from scipy.stats import norm
+    assert abs(S.exact_z([(0.5, 0.5)] * 10, 8) - norm.isf((11 + 22.5) / 1024)) < 1e-9
+
+
+def test_precision_at_k_averages_over_ties_at_the_cut():
+    assert S.precision_at_k(np.array([5, 3, 3, 1]), np.array([1, 1, 0, 0]), 2) == 0.75
+    assert S.precision_at_k(np.array([3, 3, 3, 3, 1]), np.array([1, 0, 1, 0, 1]), 2) == 0.5
+
+def test_counterfactual_rupiah_counts_excess_claims_times_delta():
+    d = pd.DataFrame({"y": [1.0] * 4, "p": [0.0] * 4, "delta": [1_000_000.0] * 4})
+    r = S.counterfactual_rupiah(d, np.random.default_rng(0), reps=50)
+    assert r.rupiah == 4_000_000 and r.rupiah_bawah == r.rupiah_atas == 4_000_000
+
+
+def test_blind_test_folders_are_refused():
+    for blocked in ("test/dasar", "sealed/test/dasar"):
+        with pytest.raises(BlindTestError):
+            load_world(ROOT / "data" / blocked)
+
+
+@needs_world
+def test_saved_model_loads_only_with_its_fingerprint(small, tmp_path):
+    h, s = small
+    vocab = A.fit_vocab(A.evidence(s, h))
+    X = A.features(A.evidence(s, h), vocab)
+    y = A.has_trigger(s).astype(int)
+    bundle = A.Bundle(A.MODEL_VERSION, vocab, {"fiktif": A.final_model(X, y, s.kode_rs.to_numpy()), "panjang": A.new_model().fit(X, y)},
+                      A.reference_values(X, y == 1), {"_semua": list(np.linspace(0, 1, 101))}, {"fiktif": 0.5, "panjang": 0.5})
+    path = tmp_path / f"ai1-{A.MODEL_VERSION}.joblib"
+    A.save_bundle(bundle, path)
+    loaded = A.load_bundle(path)
+    np.testing.assert_allclose(loaded.predict(X.head(20), "fiktif"), bundle.predict(X.head(20), "fiktif"))
+    assert loaded.status(0.9, None, None) == "periksa_manual" and loaded.status(0.9, 0.9, True) == "lolos_cepat"
+    assert loaded.status(0.4, None, True) == "periksa_manual"
+    reasons = loaded.reasons(X.head(2), "fiktif")
+    assert all({"teks", "arah", "besar"} <= set(r) for rs in reasons for r in rs)
+    path.write_bytes(path.read_bytes() + b"x")
+    with pytest.raises(ValueError):
+        A.load_bundle(path)

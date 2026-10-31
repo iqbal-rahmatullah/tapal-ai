@@ -3,6 +3,9 @@
 data/
 
 __pycache__/
+.cache/
+# Rebuilt bit-for-bit by `python3 -m engine.ai1_dev`
+models/*.joblib
 .pytest_cache/
 .venv/
 node_modules/

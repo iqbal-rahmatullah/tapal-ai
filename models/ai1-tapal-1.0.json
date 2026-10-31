@@ -1,0 +1,16 @@
+{
+ "versi_model": "tapal-1.0",
+ "sha256": "b44e39fee31a8d62bbdbc5f0fd719399517fe64c137c51d88e84052c5fb813d6",
+ "berkas": "ai1-tapal-1.0.joblib",
+ "dibuat": "2026-10-31T12:59:03+00:00",
+ "ambang": {
+  "fiktif": 0.03389830508474576,
+  "panjang": 0.7707006369426752
+ },
+ "fitur": 130,
+ "ringkasan": {
+  "dilatih_pada": "DEV dasar tanpa RS yang ditandai",
+  "klaim_fiktif": 42161,
+  "klaim_jendela": 2314
+ }
+}
