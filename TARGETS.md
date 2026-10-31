@@ -120,7 +120,9 @@ Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik
   - diperpanjang: porsi ventilasi sebenarnya 72–95 jam yang dicatat 96–104 jam;
   - RME meragukan: porsi klaim populasi garis ventilator di RS itu yang catatannya kloning atau ditulis massal;
   - yang dipakai di target adalah **intensitas terwujud**, yaitu porsi klaim di kolam modus itu yang menurut kunci benar-benar dimanipulasi. RS pelaku yang intensitas terwujudnya 0 tidak dihitung sebagai pelaku di T1 dan T11–T13.
-- **RS ditandai:** p satu sisi dari z robust (median/MAD antar-RS) lolos BH pada `BH_Q`, di lapis mana pun.
+- **RS ditandai:** p satu sisi dari z robust (median/MAD antar-RS) lolos BH pada `BH_Q`, di lapis mana pun. z setiap RS dihitung dari mid-p eksak jumlah Poisson-binomial, P(O > o) + ½·P(O = o), bukan dari pendekatan normal. Peluang per klaim AI 1 dikalibrasi isotonik, dipelajari silang dari RS lain. Aturan ini berlaku untuk semua lapis dan pembanding; untuk aturan tanpa AI, harapannya adalah laju gabungan semua RS.
+- **Jalur cepat (`lolos_cepat`):** hanya berlaku bila AI 1 menilai risiko rendah **dan** lapis cepat AI 2 bersih. Ambangnya ditetapkan setelah AI 2 selesai, sebelum tugas 720.
+- **Kode operasi besar di Data Sampel (T22, T23):** kode prosedur yang ≥50% dari ≥10 klaimnya jatuh di grup operasi besar, dihitung tanpa klaim 96.72 (hanya 96.72 yang memindahkan klaim bedah ke J-1-02), lalu dikurangi tindakan non-operasi hasil periksa akal sehat: 38.91 (kateterisasi arteri), 38.95 (kateter vena untuk dialisis), dan 90.06 (pemeriksaan sitologi). Hasilnya 60 kode, dibekukan di `engine/reality.py`.
 - **Asimetri garis (log-rasio), sama dengan v1:**
   - LR(L) = ln[(n[L, L+8) + 0,5) / (n[L−8, L) + 0,5)], dari jam tercatat klaim berventilasi;
   - S(96) = LR(96) − rerata LR pada `GARIS_PEMBANDING`;
@@ -150,7 +152,7 @@ Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik
 | T3 | Garis plasebo | rentang 95% S(120) dan S(144) pada data gabungan semua RS memuat 0 | keduanya lolos |
 | T4 | Konfirmasi penumpukan | S(96) pada RS yang ditandai di modus diperpanjang dikurangi S(96) pada RS lain; rentang 95% bootstrap per RS | batas bawah > 0 |
 | T5 | Rupiah | median \|perkiraan − sebenarnya\| / sebenarnya, pada RS pelaku yang ditandai benar | ≤25% |
-| T6 | AI vs tanpa AI | presisi pada `TOP_K` klaim teratas: AI 1 dibanding skor poin | ≥2× per modus |
+| T6 | AI vs tanpa AI | presisi pada `TOP_K` klaim teratas: AI 1 dibanding skor poin; positifnya hanya klaim modus itu, dan klaim modus lain dikeluarkan dari kumpulan, bukan dihitung salah | ≥2× per modus |
 
 ### AI 2 — pembaca RME
 | # | Target | Ukuran | Ambang |
@@ -192,6 +194,9 @@ Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik
 - Jejak modus fiktif, seperti di v1.
 - AUC dan kalibrasi AI 1 pada klaim RS jujur.
 - AI 1 juga dalam versi tanpa rincian tarif RS (`tarif_rs`), karena rincian itu dikarang dan tidak ada di Data Sampel; selisihnya menunjukkan seberapa besar kinerja AI 1 bergantung pada data karangan.
+- AI 1 juga dalam versi tanpa status pulang, di DEV dan di T22/T23, karena status pulang (terutama meninggal) adalah fitur tunggal terkuat di Data Sampel (AUC 0,867). Risikonya ditulis di keterbatasan.
+- Model sederhana (regresi logistik dengan umur, lama rawat, status pulang, dan diagnosis primer) dijalankan di jalur yang sama dengan AI 1 (kalibrasi, uji per RS, putaran ulang): T1, T2, dan plasebo DEV, serta presisi pada `TOP_K` dan pada kapasitas audit untuk kedua model, di DEV dan di Data Sampel.
+- T6 juga dengan klaim RME meragukan dihitung positif. Bila klaim positif lebih sedikit dari k, presisi maksimumnya ditulis dan perbandingannya disebut tidak bermakna.
 - Sumbangan tiap lapis AI 2: LLM saja, ditambah asersi, ditambah fisiologi (T8 per lapis).
 - Hasil kondisi Kasus sulit, Jarang, Sering, dan Terkonsentrasi.
 - **Agen audit:**
@@ -210,7 +215,7 @@ Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik
   - fraud rate di samping setiap angka presisi, dan jumlah RS di set uji;
   - uji berpasangan (bootstrap per RS) untuk selisih AI 1 dan skor poin pada T6;
   - recall pada k per modus, termasuk modus tersembunyi, dibanding k/N;
-  - uji placebo pada kembaran bebas fraud dari dunia yang sama (setiap bendera di sana adalah alarm palsu);
+  - uji placebo pada kembaran bebas fraud dari dunia yang sama (setiap bendera di sana adalah alarm palsu); plasebo DEV sudah terpakai untuk penyetelan AI 1 (31 Okt 2026), jadi yang independen hanya plasebo TEST;
   - pindai kebocoran: AUC satu fitur untuk setiap kolom publik, ambang 0,80.
 
 ## 9. Kegagalan yang diperkirakan, diumumkan sebelum uji
@@ -241,3 +246,4 @@ Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik
 | 31 Okt 2026 | draf direvisi lagi sebelum dikunci, dan **sebelum T22 diukur** pada populasi barunya: hash kunci TEST dan hash pembekuan dicatat di `TARGETS.lock`, tidak di berkas ini; istilah "kode ventilasi" (sempit) dan "populasi garis ventilator" (luas) dipisahkan per kemunculan; 96.04 menjadi bagian label AI 1, bukan fitur (opsi A), dan fitur terlarang AI 1 ditulis; klaim layak modus fiktif hanya pasien medis; operasi jantung yang tidak pindah ke J-1-02 dikeluarkan dari modus diperpanjang; T11–T12 ditambah "pada modusnya"; T22 memakai populasi klaim layak modus fiktif versi Data Sampel dengan ambang AUC ≥0,80 (sebelumnya ≥0,90 pada semua rawat inap) dan diukur dari prediksi di luar lipatan per kab/kota, T23 mengikuti; pelaporan AP, prevalensi, dan model sederhana ditambah | tinjauan pengguna atas draf |
 | 31 Okt 2026 | disetujui pengguna dan dikunci; hash dicatat di `TARGETS.lock` | — |
 | 31 Okt 2026 | direvisi sesudah dikunci, sebelum hash kunci TEST dicatat: intensitas di target ditetapkan sebagai intensitas terwujud; "tagihan" di fitur terlarang AI 1 diperjelas (tarif INA-CBG, bukan rincian tarif RS) dan AI 1 tanpa rincian tarif RS ditambahkan ke pelaporan; garis pembanding diperluas menjadi L+24, L+48, L+72 untuk garis selain 96 jam; jeda tulis RME disebut di kebiasaan yang digeser di TEST; larangan kosakata dan aturan gaya yang disisihkan di AI 2 ditambahkan, dijaga `tests/test_blind_rules.py`; pengundian modus tersembunyi dan garis kedua dibatasi pada pasangan yang mekanismenya berbeda; semua kondisi TEST memakai satu seed; Kasus sulit memakai ekor keterlambatan catatan jujur yang lebih berat dan skenario hari sibuk; jebakan RS jujur yang menulis secara massal ditambahkan ke T2; pelaporan Workshop #3 ditambahkan ke bagian 8 | tinjauan pengguna atas laporan fase 1 (data sintetis). Pemicu aturan gaya: contoh gaya yang disisihkan sempat terlihat oleh pengguna dan pengembang (`contoh-rme.md` no. 7, dibuat dari dunia buangan seed 999, bukan dari TEST). Tambahan dari Workshop #3 dan tinjauan kedua pengguna |
+| 31 Okt 2026 | direvisi sesudah hash kunci TEST dicatat, sebelum mesin dibekukan; kunci TEST tidak dibuka maupun dibaca. Isinya: z setiap RS dihitung dari mid-p eksak Poisson-binomial untuk semua lapis dan pembanding; peluang AI 1 dikalibrasi isotonik silang per RS; positif T6 hanya klaim modus itu, dan klaim modus lain dikeluarkan dari kumpulan; jalur cepat hanya bila AI 1 menilai risiko rendah dan lapis cepat AI 2 bersih; kode operasi besar di Data Sampel didefinisikan (60 kode); pelaporan ditambah AI 1 tanpa status pulang dan model sederhana di jalur yang sama dengan AI 1. **Plasebo DEV sudah terpakai untuk penyetelan**, jadi yang independen hanya plasebo TEST | hasil AI 1 di DEV dan pindai T22. Kembaran DEV tanpa fraud menandai 17 RS jujur (peluang terlalu yakin di ujung), lalu 4 RS setelah kalibrasi isotonik (dua sampai tiga klaim ventilasi singkat berkode 96.04 per RS; pendekatan normal gagal), dan 0 RS dengan p eksak di eksperimen. T6 menghukum AI 1 untuk klaim modus lain. Pelaku cerdik lolos AI 1 sepenuhnya, sehingga jalur cepat tanpa AI 2 mengulang kegagalan v1. Di T22, status pulang sendirian mencapai AUC 0,867 dan model sederhana AUC 0,950. Definisi operasi besar berbasis klaim tanpa kode pemicu membuang 15 kode bedah hanya karena jumlah klaimnya di bawah 10. T22 sudah diukur dengan definisi 63 dan 46 kode sebelum keputusan ini (AUC 0,971 pada keduanya). Keputusan pengguna 31 Okt 2026 |
