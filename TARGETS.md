@@ -53,9 +53,9 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 1. **DEV** dipakai untuk mengembangkan dan menyetel. Seed-nya tetap, dan kunci jawabannya boleh dibuka.
 2. **TEST** dibangkitkan dengan seed acak dan hanya dipakai **sekali**. Yang diacak:
    - RS pelaku, intensitas, dan tingkat pelaku, diambil dari rentang;
-   - kebiasaan dokumentasi dan derau bukti, yang digeser dari DEV.
-3. **Modus tersembunyi** dan **garis kedua yang dimanipulasi** (untuk AI 4) dipilih acak dari daftar kandidat di generator saat TEST dibangkitkan, dan pilihannya hanya tercatat di kunci tersegel. Modus tersembunyi aktif sejak bulan pertama di RS pelakunya. Daftar kandidat ditetapkan di generator sebelum mesin mana pun dibuat. Mesin tidak boleh memuat aturan atau label khusus untuk kandidat mana pun.
-4. **Gaya tulisan RME:** generator punya beberapa gaya tulisan. Satu gaya disisihkan dan hanya muncul di TEST.
+   - kebiasaan dokumentasi (termasuk jeda tulis RME) dan derau bukti, yang digeser dari DEV.
+3. **Modus tersembunyi** dan **garis kedua yang dimanipulasi** (untuk AI 4) dipilih acak dari daftar kandidat di generator saat TEST dibangkitkan (pasangan yang mekanismenya sama, misalnya sama-sama diagnosis sekunder palsu, tidak diundi bersama), dan pilihannya hanya tercatat di kunci tersegel. Modus tersembunyi aktif sejak bulan pertama di RS pelakunya. Daftar kandidat ditetapkan di generator sebelum mesin mana pun dibuat. Mesin tidak boleh memuat aturan atau label khusus untuk kandidat mana pun.
+4. **Gaya tulisan RME:** generator punya beberapa gaya tulisan. Satu gaya disisihkan dan hanya muncul di TEST. AI 2, termasuk prompt LLM dan daftar kata kuncinya, tidak boleh memuat kosakata atau aturan khusus gaya yang disisihkan; hal ini dicek otomatis oleh uji penjaga sebelum TEST dijalankan.
 5. Kunci jawaban TEST disimpan di `data/sealed/`, yang tidak ikut repo. Hash SHA-256-nya dicatat di `TARGETS.lock` (bukan di berkas ini) sebelum mesin dibuat; lihat bagian 10.
 6. Kunci tersegel hanya boleh dibuka di langkah evaluasi (tugas 720), dengan urutan ini:
    1. semua pengaturan dibekukan, lalu hash pembekuan mesin (kode, berkas model, konfigurasi) dicatat sebagai baris baru di `TARGETS.lock`;
@@ -71,11 +71,13 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 | Kondisi | Isi | Status |
 |---|---|---|
 | Dasar | 6–15% RS per modus menjadi pelaku, intensitas 8–30%, campuran tingkat biasa, cerdik-1, dan cerdik-2 | **target dinilai di sini** |
-| Kasus sulit | derau bukti lebih besar dan porsi RS cerdik lebih tinggi | dilaporkan |
+| Kasus sulit | derau bukti lebih besar, ekor keterlambatan catatan jujur lebih berat, "hari sibuk" di RS jujur yang menulis massal (seluruh catatan seorang pasien ditunda), dan porsi RS cerdik lebih tinggi | dilaporkan |
 | Jarang | 0,5% klaim di populasi garis ventilator dimanipulasi | dilaporkan |
 | Sering | 10% klaim di populasi garis ventilator dimanipulasi | dilaporkan |
 | Terkonsentrasi | manipulasi hanya di ≤5 RS dengan intensitas tinggi | dilaporkan |
 | iDRG tiruan | aturan grouper diubah: garis jam digeser dan ada satu kode pemicu baru | hanya untuk T21 |
+
+Semua kondisi TEST memakai satu seed, sehingga klaim jujur dan RS pelaku identik antarkondisi dan yang berubah hanya dial kondisinya. Kasus sulit sengaja ikut mengubah klaim jujur (derau bukti dan ekor keterlambatan catatan).
 
 ## 5. Konstanta beku
 | Nama | Nilai | Keterangan |
@@ -110,18 +112,20 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 - **Kode pemicu garis ventilator:** kode ventilasi ditambah intubasi 96.04.
 - **Populasi garis ventilator** (arti luas): klaim rawat inap bukan bayi yang dibayar di grup J-1-20, J-1-02, atau J-1-01, atau yang memuat kode pemicu. AI 1, AI 2, dan agen audit memakai populasi ini, termasuk klaim intubasi saja.
 - **Label AI 1 (modus fiktif):** kode pemicu tercatat. Intubasi 96.04 adalah bagian label, bukan fitur (keputusan pengguna 31 Okt 2026, opsi A).
-- **Fitur terlarang AI 1:** kolom yang ikut menentukan label atau grup bayar, yaitu kode pemicu, grup INA-CBG, severitas, tarif atau tagihan, jam ventilasi, ID RS, kolom kunci jawaban, dan turunan apa pun dari kolom itu (misalnya jumlah prosedur yang ikut menghitung kode pemicu).
+- **Fitur terlarang AI 1:** kolom yang ikut menentukan label atau grup bayar, yaitu kode pemicu, grup INA-CBG, severitas, tarif atau tagihan (jumlah yang ditagihkan ke BPJS, yaitu tarif INA-CBG; rincian tarif RS bukan tagihan dan boleh dipakai), jam ventilasi, ID RS, kolom kunci jawaban, dan turunan apa pun dari kolom itu (misalnya jumlah prosedur yang ikut menghitung kode pemicu).
 - **Klaim layak (modus fiktif):** rawat ICU bukan bayi pada **pasien medis** dengan diagnosis sasaran. Klaim layak menjadi penyebut intensitas fiktif dan dasar `MIN_KLAIM`, T1, dan T11. Pasien operasi besar **tidak** termasuk klaim layak, karena 96.71 tidak menaikkan tarif mereka; mereka hanya ikut di populasi model AI 1 sebagai kontrol, dan alarm palsu pada mereka dilaporkan terpisah. Daftar diagnosis sasaran dan operasi besar ditetapkan di kontrak data (tugas 110) dari campuran Data Sampel, sebelum generator dijalankan.
 - **Klaim layak (modus diperpanjang):** klaim berkode 96.71 atau 96.72 (arti sempit), pasien medis maupun operasi, **kecuali** pasien operasi jantung yang grupnya tidak pindah ke J-1-02 saat melewati 96 jam (misalnya bypass koroner dan katup jantung, yang tarifnya lebih tinggi dari J-1-02). Daftar grup yang dikecualikan ditetapkan di kontrak data (tugas 110) dari pola Data Sampel. Model dan uji O/E modus ini memakai klaim dengan jam tercatat di `JENDELA`.
 - **Intensitas:**
   - fiktif: porsi klaim layak modus fiktif (pasien medis) tanpa ventilasi yang ditagih dengan kode pemicu (96.71, atau 96.04 saja);
   - diperpanjang: porsi ventilasi sebenarnya 72–95 jam yang dicatat 96–104 jam;
-  - RME meragukan: porsi klaim populasi garis ventilator di RS itu yang catatannya kloning atau ditulis massal.
+  - RME meragukan: porsi klaim populasi garis ventilator di RS itu yang catatannya kloning atau ditulis massal;
+  - yang dipakai di target adalah **intensitas terwujud**, yaitu porsi klaim di kolam modus itu yang menurut kunci benar-benar dimanipulasi. RS pelaku yang intensitas terwujudnya 0 tidak dihitung sebagai pelaku di T1 dan T11–T13.
 - **RS ditandai:** p satu sisi dari z robust (median/MAD antar-RS) lolos BH pada `BH_Q`, di lapis mana pun.
 - **Asimetri garis (log-rasio), sama dengan v1:**
   - LR(L) = ln[(n[L, L+8) + 0,5) / (n[L−8, L) + 0,5)], dari jam tercatat klaim berventilasi;
   - S(96) = LR(96) − rerata LR pada `GARIS_PEMBANDING`;
   - untuk garis plasebo L: S(L) = LR(L) − rerata LR pada `GARIS_PEMBANDING` selain L;
+  - untuk garis L selain 96 jam (misalnya garis iDRG tiruan), garis pembandingnya L+24, L+48, dan L+72 jam selama bukan garis tarif; untuk L = 96 aturan ini menghasilkan `GARIS_PEMBANDING`;
   - rentang 95% dari bootstrap per RS.
 - **Skor poin tanpa AI:** jumlah bendera aturan per klaim. Empat aturan pertama sama dengan v1; aturan kelima ditambahkan di v2 untuk varian intubasi saja:
   - kode ventilasi tanpa kode intubasi 96.04;
@@ -142,7 +146,7 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 | # | Target | Ukuran | Ambang |
 |---|---|---|---|
 | T1 | Recall RS pelaku biasa | porsi RS pelaku tingkat biasa (intensitas ≥10%, ≥`MIN_KLAIM` klaim layak) yang ditandai pada modusnya | ≥80% per modus (fiktif, diperpanjang) |
-| T2 | Alarm palsu | porsi RS jujur yang ditandai oleh lapis mana pun; termasuk jebakan puncak 24 jam kuat dan pasien lebih berat yang terlihat di kolom | ≤5% |
+| T2 | Alarm palsu | porsi RS jujur yang ditandai oleh lapis mana pun; termasuk jebakan puncak 24 jam kuat, pasien lebih berat yang terlihat di kolom, dan RS jujur yang menulis resume serta sebagian catatan secara massal setelah pasien pulang | ≤5% |
 | T3 | Garis plasebo | rentang 95% S(120) dan S(144) pada data gabungan semua RS memuat 0 | keduanya lolos |
 | T4 | Konfirmasi penumpukan | S(96) pada RS yang ditandai di modus diperpanjang dikurangi S(96) pada RS lain; rentang 95% bootstrap per RS | batas bawah > 0 |
 | T5 | Rupiah | median \|perkiraan − sebenarnya\| / sebenarnya, pada RS pelaku yang ditandai benar | ≤25% |
@@ -187,6 +191,7 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 - Porsi rupiah tertanam yang berada di RS yang ditandai.
 - Jejak modus fiktif, seperti di v1.
 - AUC dan kalibrasi AI 1 pada klaim RS jujur.
+- AI 1 juga dalam versi tanpa rincian tarif RS (`tarif_rs`), karena rincian itu dikarang dan tidak ada di Data Sampel; selisihnya menunjukkan seberapa besar kinerja AI 1 bergantung pada data karangan.
 - Sumbangan tiap lapis AI 2: LLM saja, ditambah asersi, ditambah fisiologi (T8 per lapis).
 - Hasil kondisi Kasus sulit, Jarang, Sering, dan Terkonsentrasi.
 - **Agen audit:**
@@ -198,6 +203,15 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 - Daftar garis temuan AI 4 di Data Sampel (agregat nasional), setelah ditinjau pengguna.
 - Waktu proses per langkah di laptop demo, termasuk AI 2 per RME.
 - Keluaran kit hkeval (tugas 700), bila tersedia.
+- Mengikuti Workshop #3 (Henry Lucky, 23 Okt 2026), di samping target:
+  - presisi pada k = kapasitas audit (60 klaim per bulan, 720 setahun), di samping presisi pada `TOP_K`;
+  - lift terhadap pemilihan acak dan rupiah recall pada k;
+  - porsi RS jujur yang ditandai atau diaudit per kelas RS, regional, dan ukuran;
+  - fraud rate di samping setiap angka presisi, dan jumlah RS di set uji;
+  - uji berpasangan (bootstrap per RS) untuk selisih AI 1 dan skor poin pada T6;
+  - recall pada k per modus, termasuk modus tersembunyi, dibanding k/N;
+  - uji placebo pada kembaran bebas fraud dari dunia yang sama (setiap bendera di sana adalah alarm palsu);
+  - pindai kebocoran: AUC satu fitur untuk setiap kolom publik, ambang 0,80.
 
 ## 9. Kegagalan yang diperkirakan, diumumkan sebelum uji
 - **F1. RS cerdik-3 lolos.** RS yang memalsukan klaim, teks RME, fisiologi, dan jejak waktu secara konsisten diperkirakan lolos dari semua lapis berbasis dokumen. Hanya audit lapangan yang bisa menangkapnya; eksplorasi agen audit mungkin menemukan sebagian.
@@ -226,3 +240,4 @@ Pelajaran dari uji buta v1 yang membentuk berkas ini:
 | 31 Okt 2026 | draf direvisi sebelum dikunci: pasien operasi masuk lingkup; J-1-01 dan 96.04 disebut sebagai bagian garis; populasi garis ventilator didefinisikan; varian intubasi saja masuk modus fiktif; skor poin ditambah satu aturan; T19 diperluas menjadi 5 garis; T24 dan F9 ditambah | riset jalur tarif di Data Sampel (berkas lokal di luar repo, `tapal-percobaan/jalur-tarif-ventilasi/HASIL.md`); empat usulan disetujui pengguna |
 | 31 Okt 2026 | draf direvisi lagi sebelum dikunci, dan **sebelum T22 diukur** pada populasi barunya: hash kunci TEST dan hash pembekuan dicatat di `TARGETS.lock`, tidak di berkas ini; istilah "kode ventilasi" (sempit) dan "populasi garis ventilator" (luas) dipisahkan per kemunculan; 96.04 menjadi bagian label AI 1, bukan fitur (opsi A), dan fitur terlarang AI 1 ditulis; klaim layak modus fiktif hanya pasien medis; operasi jantung yang tidak pindah ke J-1-02 dikeluarkan dari modus diperpanjang; T11–T12 ditambah "pada modusnya"; T22 memakai populasi klaim layak modus fiktif versi Data Sampel dengan ambang AUC ≥0,80 (sebelumnya ≥0,90 pada semua rawat inap) dan diukur dari prediksi di luar lipatan per kab/kota, T23 mengikuti; pelaporan AP, prevalensi, dan model sederhana ditambah | tinjauan pengguna atas draf |
 | 31 Okt 2026 | disetujui pengguna dan dikunci; hash dicatat di `TARGETS.lock` | — |
+| 31 Okt 2026 | direvisi sesudah dikunci, sebelum hash kunci TEST dicatat: intensitas di target ditetapkan sebagai intensitas terwujud; "tagihan" di fitur terlarang AI 1 diperjelas (tarif INA-CBG, bukan rincian tarif RS) dan AI 1 tanpa rincian tarif RS ditambahkan ke pelaporan; garis pembanding diperluas menjadi L+24, L+48, L+72 untuk garis selain 96 jam; jeda tulis RME disebut di kebiasaan yang digeser di TEST; larangan kosakata dan aturan gaya yang disisihkan di AI 2 ditambahkan, dijaga `tests/test_blind_rules.py`; pengundian modus tersembunyi dan garis kedua dibatasi pada pasangan yang mekanismenya berbeda; semua kondisi TEST memakai satu seed; Kasus sulit memakai ekor keterlambatan catatan jujur yang lebih berat dan skenario hari sibuk; jebakan RS jujur yang menulis secara massal ditambahkan ke T2; pelaporan Workshop #3 ditambahkan ke bagian 8 | tinjauan pengguna atas laporan fase 1 (data sintetis). Pemicu aturan gaya: contoh gaya yang disisihkan sempat terlihat oleh pengguna dan pengembang (`contoh-rme.md` no. 7, dibuat dari dunia buangan seed 999, bukan dari TEST). Tambahan dari Workshop #3 dan tinjauan kedua pengguna |
