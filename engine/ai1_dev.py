@@ -180,8 +180,9 @@ def rule_flags(c: pd.DataFrame, rules: pd.DataFrame, pop: np.ndarray, n_layak: p
         out[col] = S.per_rs_test(c.kode_rs, y, np.full(len(c), y[pop].mean()), pop, n_layak).ditandai
     score = rules.sum(axis=1).to_numpy()[pop]
     pmf = np.bincount(score, minlength=len(rules.columns) + 1) / len(score)
-    z = pd.Series({k: S.exact_z([pmf] * len(g), int(g.sum())) for k, g in pd.Series(score).groupby(c.kode_rs.to_numpy()[pop])})
-    out["skor_poin"] = S.robust_flags(z.reindex(n_layak.index).fillna(0), n_layak).ditandai
+    per_rs = pd.Series(score).groupby(c.kode_rs.to_numpy()[pop])
+    z = pd.Series({k: S.exact_z([pmf] * len(g), int(g.sum())) for k, g in per_rs})
+    out["skor_poin"] = S.robust_flags(z.reindex(n_layak.index).fillna(0), n_layak, per_rs.sum() > per_rs.size() * score.mean()).ditandai
     return pd.DataFrame(out)
 
 

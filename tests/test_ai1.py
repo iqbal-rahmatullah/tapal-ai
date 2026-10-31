@@ -105,11 +105,22 @@ def test_main_and_simple_models_share_the_same_folds(monkeypatch):
                       "dx_primer": pd.Categorical(rng.choice(["J96", "J18", "I63"], n))})
     y, everyone = rng.integers(0, 2, n), np.ones(n, bool)
     monkeypatch.setattr(A, "GroupKFold", Recorded)
-    monkeypatch.setattr(A, "new_model", lambda seed=A.SEED: DummyClassifier())
+    monkeypatch.setattr(A, "new_model", lambda *_: DummyClassifier())
     A.cross_fit(X, y, groups, everyone, everyone)
     main, test_folds[:] = list(test_folds), []
     A.cross_fit_simple(X, y, groups, everyone, everyone)
     assert len(main) == A.N_FOLD and main == test_folds
+
+
+def test_robust_scale_is_at_least_chance_and_flags_need_an_excess():
+    idx = [f"RS-{i:03d}" for i in range(40)]
+    n = pd.Series(100, index=idx)
+    z = pd.Series(np.linspace(-0.01, 0.01, 40), index=idx)
+    z.iloc[0] = 0.5
+    assert not S.robust_flags(z, n).ditandai.any()
+    z.iloc[0] = 8.0
+    assert S.robust_flags(z, n).ditandai.iloc[0]
+    assert not S.robust_flags(z, n, pd.Series(False, index=idx)).ditandai.any()
 
 
 def test_blind_test_folders_are_refused():

@@ -12,17 +12,22 @@ B_BOOT = 1000
 AUDIT_K = 60 * 12  # KAPASITAS_AUDIT over 12 months
 
 
-def robust_flags(value: pd.Series, n_layak: pd.Series) -> pd.DataFrame:
+def robust_flags(value: pd.Series, n_layak: pd.Series, excess: pd.Series | None = None) -> pd.DataFrame:
     layak = n_layak.reindex(value.index).fillna(0) >= MIN_KLAIM
     med = value[layak].median()
     mad = 1.4826 * np.median(np.abs(value[layak] - med))
-    z = (value - med) / (mad if mad > 0 else 1.0)
+    # The exact z is already on the chance scale, so the robust scale may widen it for overdispersion but never shrink it (TARGETS riwayat baris 8).
+    z = (value - med) / np.fmax(mad, 1.0)
     p = pd.Series(np.nan, index=value.index)
     p[layak] = stats.norm.sf(z[layak])
     p_bh = pd.Series(np.nan, index=value.index)
     if layak.any():
         p_bh[layak] = stats.false_discovery_control(p[layak].to_numpy(), method="bh")
-    return pd.DataFrame({"z_robust": z, "p_satu_sisi": p, "p_bh": p_bh, "ditandai": layak & (p_bh <= BH_Q)})
+    flagged = layak & (p_bh <= BH_Q)
+    if excess is not None:
+        # Over-coding needs an excess; a near-zero MAD once flagged RS that never recorded the code at all.
+        flagged &= excess.reindex(value.index).fillna(False).astype(bool)
+    return pd.DataFrame({"z_robust": z, "p_satu_sisi": p, "p_bh": p_bh, "ditandai": flagged})
 
 
 def exact_z(pmfs, observed: int) -> float:
@@ -40,7 +45,7 @@ def per_rs_test(rs: pd.Series, y: np.ndarray, p: np.ndarray, population: np.ndar
             for k, g in d.groupby("rs")}
     t = pd.DataFrame.from_dict(rows, orient="index", columns=["n_uji", "O", "E", "z"]).reindex(n_layak.index, fill_value=0)
     t["n_layak"] = n_layak
-    return t.join(robust_flags(t.z, n_layak))
+    return t.join(robust_flags(t.z, n_layak, t.O > t.E))
 
 
 def counterfactual_rupiah(d: pd.DataFrame, rng: np.random.Generator, reps: int = B_BOOT) -> pd.DataFrame:
