@@ -148,3 +148,63 @@ def test_saved_model_loads_only_with_its_fingerprint(small, tmp_path):
     path.write_bytes(path.read_bytes() + b"x")
     with pytest.raises(ValueError):
         A.load_bundle(path)
+
+
+def test_asymmetry_sees_a_pile_up_above_the_line_and_not_at_placebo_lines():
+    from engine import lines as L
+    rng = np.random.default_rng(0)
+    honest = rng.uniform(40, 200, 6000).round()
+    hours = np.concatenate([honest, rng.uniform(96, 101, 300).round()])
+    rs = rng.integers(0, 60, len(hours))
+    t = L.asymmetry_table(hours, rs, rng, reps=200).set_index("garis")
+    assert t.at[96, "bawah"] > 0 and t.at[120, "bawah"] <= 0 <= t.at[120, "atas"] and t.at[144, "bawah"] <= 0 <= t.at[144, "atas"]
+
+
+def test_a_new_line_is_added_by_configuration_alone(tmp_path):
+    from engine import line_config as LC
+    lines = LC.load()
+    assert LC.active_hour_lines(lines) == (96,)
+    found = [{"jenis": "ambang", "atribut": "jam_ventilasi", "ambang": 72, "grup_asal": "J-1-20", "grup_tujuan": "J-1-02"}]
+    lines = LC.add_found(lines, found)
+    assert LC.active_hour_lines(lines) == (96,) and lines[-1]["status"] == "temuan"
+    path = tmp_path / "garis.json"
+    LC.save(LC.set_status(lines, "ambang:jam_ventilasi:72", "aktif"), path)
+    assert LC.active_hour_lines(LC.load(path)) == (72, 96)
+
+
+def test_line_finder_rediscovers_a_trigger_code_and_a_coded_hour_line():
+    from engine import ai4 as F4
+    rng = np.random.default_rng(0)
+    n = 600
+    kind = rng.choice(["medis", "vent", "panjang"], n, p=[0.5, 0.3, 0.2])
+    hours = np.where(kind == "vent", rng.integers(1, 96, n), np.where(kind == "panjang", rng.integers(96, 110, n), 0)).astype(float)
+    f = pd.DataFrame({"codes": [frozenset({"96.71"} if k == "vent" else {"96.72"} if k == "panjang" else set()) | {"89.65"} for k in kind],
+                      "dx1": "J96", "dx2": [frozenset()] * n, "jam_ventilasi": hours, "lama_rawat": rng.integers(1, 20, n).astype(float),
+                      "umur": rng.uniform(20, 80, n), "grup": np.select([kind == "vent", kind == "panjang"], ["J-1-20", "J-1-02"], "J-4-11"),
+                      "sev": 1, "regional": "1", "kelas_rs": "C", "kepemilikan": "swasta", "kelas_rawat": 3})
+    r = F4.find_lines(f, rng)
+    codes = {x["kode"]: x for x in r["kode"] + r["kode_setara_ambang"]}
+    assert codes["96.71"]["grup_tujuan"] == "J-1-20-I" and "89.65" not in codes
+    assert [(x["atribut"], x["ambang"], x["lewat_kode"]) for x in r["ambang"]] == [("jam_ventilasi", 96, "96.72")]
+    delta = F4.threshold_delta(f, r["ambang"][0])
+    one = f.iloc[:1]
+    gap = (F4.tariffs(one, np.array(["J-1-02"]), np.array([1])) - F4.tariffs(one, np.array(["J-1-20"]), np.array([1])))[0]
+    assert gap > 0 and np.allclose(delta[kind == "panjang"], gap) and not delta[kind != "panjang"].any()
+    assert r["ambang"][0]["grup_asal"] == "J-1-20-I"
+
+
+def test_direct_scan_finds_a_route_too_rare_for_a_tree_leaf():
+    from engine import ai4 as F4
+    rng = np.random.default_rng(1)
+    n = 900
+    kind = rng.choice(["medis", "vent", "panjang"], n, p=[0.5, 0.3, 0.2])
+    trach = (kind == "panjang") & (np.cumsum(kind == "panjang") <= 35)
+    hours = np.where(kind == "vent", rng.integers(1, 96, n), np.where(kind == "panjang", rng.integers(96, 110, n), 0)).astype(float)
+    f = pd.DataFrame({"codes": [frozenset({"96.71"} if k == "vent" else {"96.72"} if k == "panjang" else set()) | {"89.65"} | ({"31.1"} if t else set())
+                                for k, t in zip(kind, trach)],
+                      "dx1": "J96", "dx2": [frozenset()] * n, "jam_ventilasi": hours, "lama_rawat": rng.integers(1, 20, n).astype(float),
+                      "umur": rng.uniform(20, 80, n), "grup": np.select([trach, kind == "vent", kind == "panjang"], ["J-1-01", "J-1-20", "J-1-02"], "J-4-11"),
+                      "sev": 1, "regional": "1", "kelas_rs": "C", "kepemilikan": "swasta", "kelas_rawat": 3})
+    r = F4.find_lines(f, rng, min_leaf=50)
+    codes = {x["kode"]: x for x in r["kode"] + r["kode_setara_ambang"]}
+    assert codes["31.1"]["sumber"] == "kontras langsung" and codes["31.1"]["grup_tujuan"] == "J-1-01-I" and "89.65" not in codes

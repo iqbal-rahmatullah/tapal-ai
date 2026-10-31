@@ -1,0 +1,19 @@
+{
+ "versi": 1,
+ "garis": [
+  {"id": "ambang:jam_ventilasi:96", "nama": "Ventilasi mekanik 96 jam atau lebih", "jenis": "ambang", "atribut": "jam_ventilasi", "ambang": 96,
+   "lewat_kode": "96.72", "grup_asal": "J-1-20", "grup_tujuan": "J-1-02", "kelipatan_acuan": 1.76, "status": "aktif",
+   "sumber": "lingkup TAPAL v2; ditemukan ulang AI 4 di DEV"},
+  {"id": "kode:prosedur:96.71", "nama": "Ventilasi mekanik kurang dari 96 jam", "jenis": "kode", "atribut": "prosedur", "kode": "96.71",
+   "grup_asal": "grup medis (mis. J-4-11)", "grup_tujuan": "J-1-20", "kelipatan_acuan": 8.6, "status": "aktif",
+   "sumber": "lingkup TAPAL v2; ditemukan ulang AI 4 di DEV"},
+  {"id": "kode:prosedur:96.04", "nama": "Intubasi tanpa kode ventilasi", "jenis": "kode", "atribut": "prosedur", "kode": "96.04",
+   "grup_asal": "grup medis (mis. J-4-11)", "grup_tujuan": "J-1-20", "kelipatan_acuan": 8.6, "status": "aktif",
+   "sumber": "lingkup TAPAL v2; ditemukan ulang AI 4 di DEV"},
+  {"id": "kode:prosedur:31.1", "nama": "Trakeostomi pada ventilasi panjang", "jenis": "kode", "atribut": "prosedur", "kode": "31.1",
+   "grup_asal": "J-1-02", "grup_tujuan": "J-1-01", "kelipatan_acuan": 1.62, "status": "aktif",
+   "sumber": "lingkup TAPAL v2; ditemukan ulang AI 4 di DEV"},
+  {"id": "ambang:berat_lahir", "nama": "Berat lahir bayi", "jenis": "ambang", "atribut": "berat_lahir", "status": "rencana",
+   "sumber": "rencana masa finalis"}
+ ]
+}
