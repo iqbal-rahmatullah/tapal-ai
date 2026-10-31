@@ -251,10 +251,11 @@ def main() -> None:
                                rs.to_numpy()[pool], k.modus.to_numpy()[pool], kh, size, rng, other)
 
     report = {"versi_model": MODEL_VERSION, "dunia": "DEV dasar", "klaim": len(c), "rs": int(rs.nunique())}
-    runs = {}
+    runs, placebo, c0 = {}, {}, w["key_placebo_claims"]
     for variant, with_costs, status in (("lengkap", True, False), ("tanpa_rincian_tarif", False, False),
                                         ("dengan_status_pulang", True, True)):
         vocab, X, mf, mp = runs[variant] = detect(c, h, with_costs, status=status)
+        _, _, f0, p0 = placebo[variant] = detect(c0, h, with_costs, status=status)
         flags = mf.table.ditandai | mp.table.ditandai
         report[variant] = {
             "fitur": X.shape[1],
@@ -281,6 +282,9 @@ def main() -> None:
             "t6_fiktif": t6(mf.p_raw, cand_f, ["fiktif"]),
             "t6_fiktif_termasuk_rme_meragukan": t6(mf.p_raw, cand_f, FAKE),
             "t6_diperpanjang": t6(mp.p_raw, cand_p, ["diperpanjang"]),
+            "plasebo": {"ditandai_fiktif": int(f0.table.ditandai.sum()), "ditandai_diperpanjang": int(p0.table.ditandai.sum()),
+                        "rs_ditandai": {m: t.loc[t.ditandai, ["n_layak", "O", "E", "z_robust", "p_bh"]].round(3).reset_index().to_dict("records")
+                                        for m, t in (("fiktif", f0.table), ("diperpanjang", p0.table))}},
         }
         print(variant, json.dumps(report[variant]["auc_rs_jujur"]), flush=True)
 
@@ -301,8 +305,7 @@ def main() -> None:
               "t2": false_alarms(flags_f[col] | flags_p[col], kh, assessable)["t2_porsi"]}
         for col in flags_f.columns}
 
-    c0 = w["key_placebo_claims"]
-    _, _, mf0, mp0 = detect(c0, h, True)
+    _, _, mf0, mp0 = placebo["lengkap"]
     flags0 = mf0.table.ditandai | mp0.table.ditandai
     trap = kh.set_index("kode_rs").jebakan.reindex(flags0.index)
     truth0 = c0[["nomor_sep"]].merge(w["key_claims"][["nomor_sep", "ventilasi"]], on="nomor_sep", how="left").ventilasi.astype(bool)
@@ -352,8 +355,9 @@ def main() -> None:
 
     clean_f = ~rs.isin(mf.table.index[mf.table.ditandai]).to_numpy()
     clean_p = ~rs.isin(mp.table.index[mp.table.ditandai]).to_numpy()
-    models = {"fiktif": cached("final_model", CODE, X[clean_f], y_f[clean_f].astype(int), rs.to_numpy()[clean_f]),
-              "panjang": cached("final_model", CODE, X[win & clean_p], y_p[win & clean_p].astype(int), rs.to_numpy()[win & clean_p])}
+    # Not cached: a model reloaded from the cache pickles to different bytes and would change the recorded fingerprint.
+    models = {"fiktif": A.final_model(X[clean_f], y_f[clean_f].astype(int), rs.to_numpy()[clean_f]),
+              "panjang": A.final_model(X[win & clean_p], y_p[win & clean_p].astype(int), rs.to_numpy()[win & clean_p])}
     dx3 = c.diagnosa.str[:3].to_numpy()
     ref_rows = cand_f & clean_f
     q = np.linspace(0, 1, 101)

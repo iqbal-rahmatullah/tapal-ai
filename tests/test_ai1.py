@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.dummy import DummyClassifier
 
 from engine import ai1 as A
 from engine import stats as S
@@ -86,6 +87,29 @@ def test_counterfactual_rupiah_counts_excess_claims_times_delta():
     d = pd.DataFrame({"y": [1.0] * 4, "p": [0.0] * 4, "delta": [1_000_000.0] * 4})
     r = S.counterfactual_rupiah(d, np.random.default_rng(0), reps=50)
     assert r.rupiah == 4_000_000 and r.rupiah_bawah == r.rupiah_atas == 4_000_000
+
+
+def test_main_and_simple_models_share_the_same_folds(monkeypatch):
+    test_folds = []
+
+    class Recorded(A.GroupKFold):
+        def split(self, X, y=None, groups=None):
+            for tr, te in super().split(X, y, groups):
+                test_folds.append(sorted(set(groups[te])))
+                yield tr, te
+
+    rng = np.random.default_rng(0)
+    n = 400
+    groups = rng.choice([f"KAB-{i:02d}" for i in range(20)], n)
+    X = pd.DataFrame({"umur": rng.uniform(20, 80, n), "lama_rawat": rng.integers(1, 15, n).astype(float),
+                      "dx_primer": pd.Categorical(rng.choice(["J96", "J18", "I63"], n))})
+    y, everyone = rng.integers(0, 2, n), np.ones(n, bool)
+    monkeypatch.setattr(A, "GroupKFold", Recorded)
+    monkeypatch.setattr(A, "new_model", lambda seed=A.SEED: DummyClassifier())
+    A.cross_fit(X, y, groups, everyone, everyone)
+    main, test_folds[:] = list(test_folds), []
+    A.cross_fit_simple(X, y, groups, everyone, everyone)
+    assert len(main) == A.N_FOLD and main == test_folds
 
 
 def test_blind_test_folders_are_refused():
