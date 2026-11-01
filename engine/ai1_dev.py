@@ -13,9 +13,10 @@ from sklearn.metrics import roc_auc_score
 from engine import MODEL_VERSION
 from engine import ai1 as A
 from engine import stats as S
-from engine.data import DEV, ROOT, load_world
+from engine.data import ROOT, canonical_dev, key_dir, load_world, out_dir, world_dir
+from engine.data import label as world_label
 
-OUT = Path(__file__).resolve().parents[2] / "tapal-percobaan" / "ai1-dev"
+OUT = out_dir("ai1-dev")
 FAKE = ("fiktif", "rme_meragukan")
 # DEV only: the key also hashes the AI 1 source and library versions, so any change to data, code, or config starts afresh.
 CACHE = Memory(ROOT / ".cache" / "ai1-dev", verbose=0)
@@ -222,7 +223,7 @@ def calibration_plot(series: dict[str, list[dict]], path: Path) -> None:
     ax.minorticks_off()
     ax.set_xlabel("Peluang kode pemicu menurut AI 1 (skala logit)")
     ax.set_ylabel("Porsi klaim yang berkode pemicu, teramati")
-    ax.set_title("Kalibrasi AI 1 modus fiktif di klaim RS jujur, DEV", loc="left")
+    ax.set_title(f"Kalibrasi AI 1 modus fiktif di klaim RS jujur, {world_label()}", loc="left")
     ax.legend(frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
@@ -232,7 +233,7 @@ def calibration_plot(series: dict[str, list[dict]], path: Path) -> None:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(A.SEED)
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(world_dir(), with_key=True, key=key_dir())
     c, h, kh = w["claims"], w["hospitals"], w["key_hospitals"]
     k = c[["nomor_sep"]].merge(w["key_claims"], on="nomor_sep", how="left")
     rs = c.kode_rs
@@ -251,7 +252,7 @@ def main() -> None:
         return ranking_metrics(1 - p[pool], score[pool], positive[pool], (k.selisih_rupiah.to_numpy() * positive)[pool],
                                rs.to_numpy()[pool], k.modus.to_numpy()[pool], kh, size, rng, other)
 
-    report = {"versi_model": MODEL_VERSION, "dunia": "DEV dasar", "klaim": len(c), "rs": int(rs.nunique())}
+    report = {"versi_model": MODEL_VERSION, "dunia": world_label(), "klaim": len(c), "rs": int(rs.nunique())}
     runs, placebo, c0 = {}, {}, w["key_placebo_claims"]
     for variant, with_costs, status in (("lengkap", True, False), ("tanpa_rincian_tarif", False, False),
                                         ("dengan_status_pulang", True, True)):
@@ -367,9 +368,9 @@ def main() -> None:
                         for d, n in pd.Series(dx3[ref_rows]).value_counts().items() if n >= 30})
     bundle = A.Bundle(MODEL_VERSION, vocab, models, A.reference_values(X, y_f & clean_f & (mf.p >= 0.5)), percentiles,
                       {"fiktif": tau_f, "panjang": tau_p},
-                      {"dilatih_pada": "DEV dasar tanpa RS yang ditandai", "klaim_fiktif": int(clean_f.sum()),
+                      {"dilatih_pada": f"{world_label()} tanpa RS yang ditandai", "klaim_fiktif": int(clean_f.sum()),
                        "klaim_jendela": int((win & clean_p).sum())})
-    report["model_tersimpan"] = A.save_bundle(bundle, A.MODELS_DIR / f"ai1-{MODEL_VERSION}.joblib")
+    report["model_tersimpan"] = A.save_bundle(bundle, (A.MODELS_DIR if canonical_dev() else OUT) / f"ai1-{MODEL_VERSION}.joblib")
     report["rs_ditandai"] = {
         "fiktif": flagged_hospitals(mf, elig_f & y_f, rs, X, bundle, "fiktif", report["lengkap"]["t5_fiktif"]["rs"]),
         "diperpanjang": flagged_hospitals(mp, cand_p, rs, X, bundle, "panjang", report["lengkap"]["t5_diperpanjang"]["rs"]),

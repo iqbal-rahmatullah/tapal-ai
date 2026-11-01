@@ -123,10 +123,17 @@ def test_robust_scale_is_at_least_chance_and_flags_need_an_excess():
     assert not S.robust_flags(z, n, pd.Series(False, index=idx)).ditandai.any()
 
 
-def test_blind_test_folders_are_refused():
-    for blocked in ("test/dasar", "sealed/test/dasar"):
+def test_blind_test_folders_are_refused(monkeypatch):
+    for value in (None, "ya", "1"):
+        if value is None:
+            monkeypatch.delenv("TAPAL_BUKA_SEGEL", raising=False)
+        else:
+            monkeypatch.setenv("TAPAL_BUKA_SEGEL", value)
+        for blocked in ("test/dasar", "sealed/test/dasar"):
+            with pytest.raises(BlindTestError):
+                load_world(ROOT / "data" / blocked)
         with pytest.raises(BlindTestError):
-            load_world(ROOT / "data" / blocked)
+            load_world(ROOT / "data" / "dev" / "dasar", with_key=True, key=ROOT / "data" / "sealed" / "x")
 
 
 @needs_world

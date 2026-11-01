@@ -12,7 +12,7 @@ from engine import ai2_fast as F2
 from engine import ai2_physiology as P2
 from engine import ai3_dev as D
 from engine.contracts import split_codes
-from engine.data import DEV, load_world
+from engine.data import DEV, is_dev, key_dir, load_world, world_dir
 from engine.synth import build as Bd
 from engine.synth import fraud as Fr
 from engine.synth import rme as R
@@ -51,8 +51,8 @@ def adapted_roles(roles: pd.DataFrame, kind: str) -> pd.DataFrame:
 
 def generate(kind: str, with_rme: bool = True) -> dict:
     # Same seeds and steps as engine.synth.build.build for DEV dasar, so SEP and RS numbers match the base world exactly.
-    seed = json.loads((DEV / "dasar" / "key" / "key_world.json").read_text())["seed"]
-    spec = Bd.world_spec(seed, "dasar", False)
+    seed = json.loads((key_dir() / "key_world.json").read_text())["seed"]
+    spec = Bd.world_spec(seed, world_dir().name, not is_dev())
     p = replace(spec["params"], scale=1.0)
     cal = W.load_calibration()
     h, s = W.build_world(p, cal)
@@ -126,7 +126,7 @@ def ai1_scores(kind: str, with_costs: bool) -> pd.DataFrame:
     if path.exists():
         return pd.read_parquet(path)
     if kind == "dev":
-        w = load_world(DEV / "dasar")
+        w = load_world(world_dir())
         c, h = w["claims"], w["hospitals"]
     else:
         t = generate(kind, with_rme=False)

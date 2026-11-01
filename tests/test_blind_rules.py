@@ -59,3 +59,14 @@ def test_engines_never_point_at_the_blind_test_data():
                 if "sealed" in text or re.search(r"\btest\b", text):
                     hits.append(str(rel))
     assert not hits
+
+
+def test_ai4_finds_lines_without_being_told_them():
+    # T24 is a blind rediscovery: the line finder may hold no procedure code, payment group, or hour threshold of the known ventilator routes.
+    tokens = list(tokenize.generate_tokens(io.StringIO((ROOT / "engine" / "ai4.py").read_text()).readline))
+    strings = " ".join(t.string for t in tokens if t.type in (tokenize.STRING, tokenize.FSTRING_MIDDLE))
+    numbers = {float(t.string.replace("_", "")) for t in tokens if t.type == tokenize.NUMBER}
+    assert not re.search(r"\d{2}\.\d{1,2}|[A-Z]-\d-\d{2}|\b[A-Z]\d{2}(\.\d{1,2})?\b", strings)
+    assert not numbers & {72.0, 96.0, 120.0, 96.04, 96.07, 96.70, 96.71, 96.72, 31.1, 31.29, 38.95, 38.93, 34.04, 93.90, 57.94}
+    imported = {line.split()[1] for line in (ROOT / "engine" / "ai4.py").read_text().splitlines() if line.startswith("from engine")}
+    assert imported <= {"engine.ai1", "engine.contracts", "engine.stats", "engine.synth"}, imported

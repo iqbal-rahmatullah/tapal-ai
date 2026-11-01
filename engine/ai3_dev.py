@@ -11,11 +11,12 @@ from engine import ai3 as A
 from engine.ai1_dev import honest_hospitals
 from engine import stats as S
 from engine.contracts import split_codes
-from engine.data import DEV, load_world
+from engine.data import key_dir, load_world, out_dir, world_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT.parent / "tapal-percobaan" / "ai3-dev"
-AI2 = OUT.parent / "ai2-dev"
+OUT = out_dir("ai3-dev")
+OUT.mkdir(parents=True, exist_ok=True)
+AI2 = out_dir("ai2-dev")
 POLICIES = ["agen", "statis_gabungan", "statis_ai1", "aturan", "acak"]
 Z95 = 1.959964
 
@@ -42,10 +43,10 @@ def build_tables(pop: pd.DataFrame, h: pd.DataFrame, score: pd.DataFrame, kw_ver
         "skor_poin": S.point_score_rules(pop).sum(axis=1).to_numpy(),
     })
     kk = key.loc[seps]
-    kh = load_world(DEV / "dasar", with_key=True)["key_hospitals"]
+    kh = load_world(world_dir(), with_key=True, key=key_dir())["key_hospitals"]
     honest_rs = kh.kode_rs[honest_hospitals(kh)]
     # The hidden mode is read from the world record, so no candidate name is written into the engine (TARGETS bagian 3).
-    hidden = json.loads((DEV / "dasar" / "key" / "key_world.json").read_text())["modus_tersembunyi"]
+    hidden = json.loads((key_dir() / "key_world.json").read_text())["modus_tersembunyi"]
     o = pd.DataFrame({"nomor_sep": seps, "temuan": kk.dimanipulasi.to_numpy().astype(int),
                       "rupiah": np.where(kk.dimanipulasi, kk.selisih_rupiah, 0.0), "tersembunyi": kk.modus.eq(hidden).to_numpy(),
                       "rs_jujur": pop.kode_rs.isin(honest_rs).to_numpy()})
@@ -57,12 +58,12 @@ def world() -> tuple[pd.DataFrame, pd.DataFrame]:
     if path_f.exists() and path_o.exists():
         return pd.read_parquet(path_f), pd.read_parquet(path_o)
     OUT.mkdir(parents=True, exist_ok=True)
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(world_dir(), with_key=True, key=key_dir())
     c, h, k = w["claims"], w["hospitals"], w["key_claims"].set_index("nomor_sep")
     pop = c[c.nomor_sep.isin(k.index[k.populasi_garis.fillna(False)])].reset_index(drop=True)
     kw = pd.read_parquet(AI2 / "kata_kunci_per_klaim.parquet")
     fast = pd.read_parquet(AI2 / "lapis_cepat_per_klaim.parquet")
-    f, o = build_tables(pop, h, pd.read_parquet(OUT.parent / "ai1-dev" / "skor_luar_lipatan_dev.parquet").set_index("nomor_sep"), kw.verdict, kw.jam,
+    f, o = build_tables(pop, h, pd.read_parquet(out_dir("ai1-dev") / "skor_luar_lipatan_dev.parquet").set_index("nomor_sep"), kw.verdict, kw.jam,
                         pd.read_parquet(AI2 / "fisiologi_per_klaim.parquet").lembar, fast.kloning_kuat, fast.tulis_serentak,
                         pd.read_parquet(AI2 / "asersi_per_klaim_embedding_embedding_ngram.parquet").ventilasi, k)
     f.to_parquet(path_f)
@@ -158,7 +159,7 @@ def _coverage(est: np.ndarray, var: np.ndarray, truth: np.ndarray) -> dict:
 
 
 def summarise(runs: dict[str, list[list[dict]]]) -> dict:
-    kh = load_world(DEV / "dasar", with_key=True)["key_hospitals"].set_index("kode_rs")
+    kh = load_world(world_dir(), with_key=True, key=key_dir())["key_hospitals"].set_index("kode_rs")
     honest = set(kh.index[honest_hospitals(kh.reset_index()).to_numpy()])
     out = {"kapasitas": A.CAPACITY, "ulangan": {p: len(r) for p, r in runs.items()}}
     for policy, reps in runs.items():
@@ -207,7 +208,7 @@ def summarise(runs: dict[str, list[list[dict]]]) -> dict:
 def ordering(reps: int = 200) -> dict:
     from engine import ai3_worlds as V
     worlds = {"dasar": world(), **{kind: V.variant(kind) for kind in V.OUTCOMES}}
-    roles = load_world(DEV / "dasar", with_key=True)["key_hospitals"].set_index("kode_rs")
+    roles = load_world(world_dir(), with_key=True, key=key_dir())["key_hospitals"].set_index("kode_rs")
     runs = {p: [run_once(worlds, p, np.random.default_rng([r, 0]), roles=roles) for r in range(reps)] for p in ("agen", "agen_peluang")}
     keep = ("rupiah_setahun_rerata", "porsi_kebocoran_ditemukan", "klaim_rs_jujur_per_100_audit", "rs_jujur_diaudit_rerata",
             "bulan_modus_tersembunyi_median", "ppi_resmi")
@@ -225,7 +226,7 @@ def burden(reps: int = 100) -> dict:
     # How often an honest hospital is audited in a year, and why: the question "has almost every honest RS been audited?".
     from engine import ai3_worlds as V
     worlds = {"dasar": world(), **{kind: V.variant(kind) for kind in V.OUTCOMES}}
-    kh = load_world(DEV / "dasar", with_key=True)["key_hospitals"]
+    kh = load_world(world_dir(), with_key=True, key=key_dir())["key_hospitals"]
     honest = set(kh.kode_rs[honest_hospitals(kh)])
     roles = kh.set_index("kode_rs")
     out = {"rs_jujur": len(honest), "ulangan": reps}
@@ -253,7 +254,7 @@ def simulate(reps: int = A.N_REPEAT, adapt: bool = False, calibration_reps: int 
     if adapt:
         from engine import ai3_worlds as V
         worlds |= {kind: V.variant(kind) for kind in V.OUTCOMES}
-        roles = load_world(DEV / "dasar", with_key=True)["key_hospitals"].set_index("kode_rs")
+        roles = load_world(world_dir(), with_key=True, key=key_dir())["key_hospitals"].set_index("kode_rs")
     if ai1 == "jujur":
         worlds = {name: (honest_ai1(f, "dev" if name == "dasar" else name), o) for name, (f, o) in worlds.items()}
     runs = {p: [] for p in policies}

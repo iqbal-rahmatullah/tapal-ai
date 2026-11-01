@@ -9,9 +9,9 @@ from engine import ai1_dev as D
 from engine import ai4 as F4
 from engine import lines as L
 from engine import stats as S
-from engine.data import DEV, load_world
+from engine.data import is_dev, load_world, out_dir, sibling, world_dir
 
-OUT = Path(__file__).resolve().parents[2] / "tapal-percobaan" / "ai4-dev"
+OUT = out_dir("ai4-dev")
 # What each embedded second line adds (engine.synth.fraud); used only to score T19/T20 against the open DEV key.
 SECOND_LINE_CODE = {"akses_dialisis_fiktif": "38.95", "dx_sekunder_fiktif": "N17", "wsd_fiktif": "34.04"}
 
@@ -56,12 +56,13 @@ def threshold_test(c: pd.DataFrame, line: dict, delta: float, rng: np.random.Gen
 
 def run_world(name: str, evaluate: bool) -> dict:
     rng = np.random.default_rng(0)
-    w = load_world(DEV / name, with_key=evaluate)
+    world, key = sibling(name)
+    w = load_world(world, with_key=evaluate, key=key)
     c, h = w["claims"], w["hospitals"]
     f = F4.frame_from_claims(c, h)
     found = F4.find_lines(f, rng)
     sur = found.pop("surrogate")
-    report = {"dunia": f"DEV {name}", **found}
+    report = {"dunia": f"{'DEV' if is_dev() else world_dir().parent.name} {name}", **found}
     if not evaluate:
         return report
     X = A.features(A.evidence(c, h), A.fit_vocab(A.evidence(c, h)))
@@ -77,7 +78,7 @@ def run_world(name: str, evaluate: bool) -> dict:
                                 "rentang95": x["uji"].get("rupiah_rentang95") or x["uji"].get("rupiah_jumlah_rentang_per_rs"),
                                 "terukur": x["uji"].get("rupiah_terukur", True)}
                                for x in sorted(lit, key=lambda x: (not x["uji"].get("rupiah_terukur", True), -x["uji"]["rupiah"]))]
-    kw = json.loads((DEV / name / "key" / "key_world.json").read_text())
+    kw = json.loads((key / "key_world.json").read_text())
     manipulated = {"96.71", "96.04", f"jam_ventilasi {kw['grouper']['garis_jam']}", SECOND_LINE_CODE[kw["garis_kedua"]]}
     names = {x.get("kode") or f"{x['atribut']} {x['ambang']}": x for x in report["ambang"] + report["kode"]}
     k = c[["nomor_sep"]].merge(w["key_claims"], on="nomor_sep", how="left")

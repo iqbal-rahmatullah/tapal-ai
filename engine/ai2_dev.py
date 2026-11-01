@@ -1,10 +1,15 @@
+import hashlib
 import json
+import os
 import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 import joblib
 import numpy as np
 import pandas as pd
@@ -18,16 +23,26 @@ from engine import ai2_physiology as P
 from engine import narrative as N
 from engine import stats as S
 from engine.contracts import RmeReading, split_codes
-from engine.data import DEV, load_world
+from engine.data import DEV, LAB, is_dev, key_dir, load_world, out_dir, world_dir
 
-OUT = Path(__file__).resolve().parents[2] / "tapal-percobaan" / "ai2-dev"
+OUT = out_dir("ai2-dev")
+OUT.mkdir(parents=True, exist_ok=True)
+# Readers trained on DEV, their embedding caches, and the stored DEV readings stay in the DEV folder whatever world is evaluated.
+DEV_OUT = LAB / "ai2-dev"
 READINGS = OUT / "bacaan_llm.jsonl"
-TEST_DOCS = OUT.parent / "uji-llm-ai2"
+TEST_DOCS = DEV_OUT.parent / "uji-llm-ai2"
+WORLD, KEY = world_dir(), key_dir()
+WORLD_EMBEDDINGS = ("embedding_kalimat_dunia_bge_m3.npy", "embedding_kalimat_dunia_teks.parquet")
+# Frozen LLM build: a run stops unless Ollama serves exactly this digest of the model (TARGETS riwayat baris 13).
+LLM_DIGEST = "ee665637121887cf3befff38abbb1be4ee117c7db867d97a67e29049ecd7e15f"
 EMBEDDINGS = (("embedding_kalimat_bge_m3.npy", "embedding_kalimat_teks.parquet"),
               ("embedding_kalimat_lain_bge_m3.npy", "embedding_kalimat_lain_teks.parquet"))
 # Strata mirror TARGETS N_LLM (modus x tingkat x gaya tulisan); the honest stratum is the largest so accuracy has a base.
 STRATA = {"jujur": 120, "kelas_naik": 15, "fiktif_biasa": 30, "fiktif_cerdik_1": 30, "karangan": 30, "kloning": 30, "massal": 30,
           "diperpanjang": 20, "intubasi_saja": 15}
+# TARGETS N_LLM is 300 for the blind set: the DEV strata scaled to 300, same seed and style round-robin, written before the key opens.
+STRATA_300 = {"jujur": 112, "kelas_naik": 14, "fiktif_biasa": 28, "fiktif_cerdik_1": 28, "karangan": 28, "kloning": 28, "massal": 28,
+              "diperpanjang": 19, "intubasi_saja": 15}
 
 
 def stratum(k: pd.DataFrame) -> pd.Series:
@@ -39,38 +54,122 @@ def stratum(k: pd.DataFrame) -> pd.Series:
         index=k.index)
 
 
-def sample(k: pd.DataFrame, seed: int = 0) -> pd.DataFrame:
+def sample(k: pd.DataFrame, seed: int = 0, strata: dict[str, int] | None = None, total: int | None = None) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     pop = k[k.populasi_garis.fillna(False)].assign(lapis=lambda d: stratum(d))
-    picks = []
-    for name, n in STRATA.items():
+    picks, order = [], {}
+    for name, n in (strata or STRATA).items():
         # Round-robin over writing styles, so a style short of claims hands its share to the others.
         pool = pop[pop.lapis == name].sample(frac=1, random_state=int(rng.integers(1 << 31)))
-        picks += list(pool.assign(r=pool.groupby("gaya_tulis").cumcount()).sort_values("r", kind="mergesort").head(n).index)
+        order[name] = list(pool.assign(r=pool.groupby("gaya_tulis").cumcount()).sort_values("r", kind="mergesort").index)
+        picks += order[name][:n]
+    if total is not None and len(picks) < total:
+        # N_LLM may not shrink: a short stratum's shortfall is filled from the honest stratum, in the same style order (rule set before the key opens).
+        picks += [s for s in order["jujur"] if s not in set(picks)][:total - len(picks)]
     return pop.loc[picks]
+
+
+def llm_digest() -> str:
+    tags = httpx.get(f"{B.OLLAMA}/api/tags", timeout=10).raise_for_status().json()["models"]
+    return next(m["digest"] for m in tags if m["name"] == B.MODEL)
+
+
+def llm_key(text: str, digest: str) -> str:
+    # A stored reading is reused only for the same model build, prompt, schema, options, and record text.
+    return hashlib.sha256(json.dumps([digest, B.PROMPT, B.SCHEMA, B.OPTIONS, text], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def prompt_key() -> str:
+    return hashlib.sha256(json.dumps([LLM_DIGEST, B.PROMPT, B.SCHEMA, B.OPTIONS], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def stored_readings() -> dict[str, dict]:
+    path, proof = DEV_OUT / "bacaan_llm.jsonl", DEV_OUT / "verifikasi_bacaan_tersimpan.json"
+    if not path.exists() or path.resolve() == READINGS.resolve() or not proof.exists():
+        return {}
+    # Reuse needs proof that this model build and prompt reproduce the stored readings exactly (a fresh re-read of a DEV sample).
+    if json.loads(proof.read_text()).get("kunci_prompt") != prompt_key():
+        return {}
+    rows = [json.loads(line) for line in path.open()]
+    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
+    texts = {sep: B.assemble(d).text for sep, d in docs[docs.nomor_sep.isin([r["nomor_sep"] for r in rows])].groupby("nomor_sep")}
+    return {llm_key(texts[r["nomor_sep"]], LLM_DIGEST): r for r in rows}
+
+
+def parallel_slots() -> int:
+    workers = int(os.environ.get("TAPAL_LLM_PARALEL", "1"))
+    if workers > 1:
+        # Requests sharing the GPU can outlast the app's 120-second limit; the batch run waits longer instead of failing a reading.
+        B.TIMEOUT = httpx.Timeout(600.0, connect=5.0)
+    return workers
 
 
 def run(limit: int | None = None) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    w = load_world(DEV / "dasar", with_key=True)
+    if (digest := llm_digest()) != LLM_DIGEST:
+        raise SystemExit(f"versi LLM {digest[:12]} bukan versi beku {LLM_DIGEST[:12]}")
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
-    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
-    chosen = sample(k)
+    docs = pd.read_parquet(WORLD / "rme_documents.parquet")
+    chosen = sample(k) if is_dev() else sample(k, strata=STRATA_300, total=sum(STRATA_300.values()))
     done = {json.loads(line)["nomor_sep"] for line in READINGS.open()} if READINGS.exists() else set()
     todo = [s for s in chosen.index if s not in done][:limit]
-    print(f"sampel {len(chosen)}, sudah {len(done)}, dikerjakan sekarang {len(todo)}", flush=True)
     by_sep = dict(tuple(docs[docs.nomor_sep.isin(todo)].groupby("nomor_sep")))
-    with READINGS.open("a") as out:
-        for i, sep in enumerate(todo, 1):
-            row, key = c.loc[sep], chosen.loc[sep]
-            r = B.read_claim(by_sep[sep], set(split_codes(row.procedure)), float(row.ventilator_hour))
-            truth_hours = (key.rme_selesai - key.rme_mulai).total_seconds() / 3600 if key.rme_ventilasi else 0.0
-            out.write(json.dumps({"nomor_sep": sep, "lapis": key.lapis, "gaya": key.gaya_tulis, "modus": key.modus, "tingkat": key.tingkat,
-                                  "rme_versi": key.rme_versi, "ventilasi_benar": bool(key.ventilasi), "rme_ventilasi": bool(key.rme_ventilasi),
-                                  "rme_jam": truth_hours, "klaim_jam": float(row.ventilator_hour), "kode": sorted(split_codes(row.procedure)),
-                                  **asdict(r)}, ensure_ascii=False, default=str) + "\n")
+    reuse = stored_readings()
+    hits = {s: reuse.get(llm_key(B.assemble(by_sep[s]).text, LLM_DIGEST)) for s in todo}
+    print(f"sampel {len(chosen)}, sudah {len(done)}, dikerjakan sekarang {len(todo)}, dipakai ulang {sum(v is not None for v in hits.values())}",
+          flush=True)
+
+    def one(sep: str) -> str:
+        if hits[sep] is not None:
+            return json.dumps(hits[sep], ensure_ascii=False, default=str) + "\n"
+        row, key = c.loc[sep], chosen.loc[sep]
+        r = B.read_claim(by_sep[sep], set(split_codes(row.procedure)), float(row.ventilator_hour))
+        truth_hours = (key.rme_selesai - key.rme_mulai).total_seconds() / 3600 if key.rme_ventilasi else 0.0
+        return json.dumps({"nomor_sep": sep, "lapis": key.lapis, "gaya": key.gaya_tulis, "modus": key.modus, "tingkat": key.tingkat,
+                           "rme_versi": key.rme_versi, "ventilasi_benar": bool(key.ventilasi), "rme_ventilasi": bool(key.rme_ventilasi),
+                           "rme_jam": truth_hours, "klaim_jam": float(row.ventilator_hour), "kode": sorted(split_codes(row.procedure)),
+                           **asdict(r)}, ensure_ascii=False, default=str) + "\n"
+
+    with READINGS.open("a") as out, ThreadPoolExecutor(parallel_slots()) as pool:
+        # Each finished reading is written at once, so a stopped run resumes from the readings already on disk.
+        for i, line in enumerate(pool.map(one, todo), 1):
+            out.write(line)
             out.flush()
-            print(f"{i}/{len(todo)} {sep} {key.lapis} {r.verdict} {r.total_ms} ms", flush=True)
+            print(f"{i}/{len(todo)} {json.loads(line)['nomor_sep']}", flush=True)
+    retries = DEV_OUT / "bacaan_llm_ulang.jsonl"
+    if is_dev() and reuse and retries.exists() and not (OUT / retries.name).exists():
+        # DEV readings predate the inline retry; their stored retries travel with them so the layered report sees the same inputs.
+        (OUT / retries.name).write_text(retries.read_text())
+
+
+def parallel_check(n: int = 20) -> dict:
+    # The first n stored sequential DEV readings, read again with the current parallel setting; verdicts must not change.
+    rows = [json.loads(line) for line in (DEV_OUT / "bacaan_llm.jsonl").open()][:n]
+    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
+    records = {s: B.assemble(d) for s, d in docs[docs.nomor_sep.isin([r["nomor_sep"] for r in rows])].groupby("nomor_sep")}
+    workers = parallel_slots()
+    start = time.time()
+    with ThreadPoolExecutor(workers) as pool:
+        calls = list(pool.map(lambda r: B.call_ollama(records[r["nomor_sep"]].text), rows))
+    seconds = time.time() - start
+
+    def verdict(reading: dict, r: dict) -> tuple:
+        rd = RmeReading.model_validate(reading)
+        check = B.check_reading(rd, records[r["nomor_sep"]])
+        return B.judge(check, rd, set(r["kode"]), r["klaim_jam"])[0], rd.ventilasi_invasif, check.hours
+
+    pairs = [(call.reading.model_dump(), r["reading"], r) for call, r in zip(calls, rows) if call.reading is not None and r["reading"] is not None]
+    report = {"permintaan_paralel": workers, "rme": len(rows), "detik_per_rme": round(seconds / len(rows), 1),
+              "detik_per_rme_berurutan_tersimpan": round(float(np.median([r["total_ms"] for r in rows])) / 1000, 1),
+              "bacaan_sah": len(pairs), "bacaan_identik": sum(a == b for a, b, _ in pairs),
+              "putusan_sama": sum(verdict(a, r) == verdict(b, r) for a, b, r in pairs),
+              "beda": [r["nomor_sep"] for a, b, r in pairs if verdict(a, r) != verdict(b, r)]}
+    report["kunci_prompt"] = prompt_key()
+    (OUT / f"uji_paralel_{workers}.json").write_text(json.dumps(report, ensure_ascii=False, indent=1))
+    if report["bacaan_identik"] == report["bacaan_sah"] == report["rme"]:
+        (DEV_OUT / "verifikasi_bacaan_tersimpan.json").write_text(json.dumps(report, ensure_ascii=False, indent=1))
+    return report
 
 
 def truth(k: pd.DataFrame) -> pd.DataFrame:
@@ -126,10 +225,10 @@ def keyword_rows(c: pd.DataFrame, docs: pd.DataFrame, pop: pd.Index) -> pd.DataF
 
 
 def keyword_layer() -> dict:
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
     pop = k.index[k.populasi_garis.fillna(False)]
-    out = keyword_rows(c, pd.read_parquet(DEV / "dasar" / "rme_documents.parquet"), pop)
+    out = keyword_rows(c, pd.read_parquet(WORLD / "rme_documents.parquet"), pop)
     out.to_parquet(OUT / "kata_kunci_per_klaim.parquet")
     report = score(out, truth(k.loc[pop]))
     (OUT / "kata_kunci_laporan.json").write_text(json.dumps(report, ensure_ascii=False, indent=1, default=str))
@@ -139,10 +238,10 @@ def keyword_layer() -> dict:
 def physiology_report() -> dict:
     icu = Path(__file__).resolve().parents[1] / "data" / "icu_open"
     model, report = P.train(pd.read_parquet(icu / "eicu_hourly.parquet"), pd.read_parquet(icu / "mimic_hourly.parquet"))
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
     pop = k.index[k.populasi_garis.fillna(False)]
-    vitals = pd.read_parquet(DEV / "dasar" / "rme_vitals.parquet")
+    vitals = pd.read_parquet(WORLD / "rme_vitals.parquet")
     hourly = P.hourly_ventilation(model, vitals[vitals.nomor_sep.isin(pop)])
     hourly.to_parquet(OUT / "fisiologi_per_jam_dev.parquet")
     x = truth(k.loc[pop]).assign(lembar=P.ventilated_hours(hourly), klaim=c.loc[pop].ventilator_hour.astype(float),
@@ -166,7 +265,54 @@ def physiology_report() -> dict:
 def use_embedding_cache(heads) -> None:
     if "embedding" in set(heads.values() if isinstance(heads, dict) else heads):
         for vectors, texts in EMBEDDINGS:
-            A.load_embeddings(OUT / vectors, OUT / texts)
+            A.load_embeddings(DEV_OUT / vectors, DEV_OUT / texts)
+        if (OUT / WORLD_EMBEDDINGS[0]).exists() and OUT.resolve() != DEV_OUT.resolve():
+            A.load_embeddings(OUT / WORLD_EMBEDDINGS[0], OUT / WORLD_EMBEDDINGS[1])
+
+
+def world_sentences() -> set[str]:
+    k = load_world(WORLD, with_key=True, key=KEY)["key_claims"]
+    pop = set(k.nomor_sep[k.populasi_garis.fillna(False)])
+    texts = set()
+    for path in (WORLD / "rme_documents.parquet", KEY / "key_placebo_rme_documents.parquet"):
+        if path.exists():
+            docs = pd.read_parquet(path)
+            texts |= {s for _, d in docs[docs.nomor_sep.isin(pop)].groupby("nomor_sep") for s in B.sentences(B.assemble(d))}
+    if (KEY / "key_sentences.parquet").exists():
+        lab = pd.read_parquet(KEY / "key_sentences.parquet")
+        style = pd.read_parquet(KEY / "key_claims.parquet", columns=["nomor_sep", "gaya_tulis"]).set_index("nomor_sep").gaya_tulis
+        texts |= set(A.training_sentences(pd.read_parquet(WORLD / "rme_documents.parquet"), lab, style).teks)
+    return texts
+
+
+def embed_world() -> dict:
+    # The evaluated world's sentences are embedded once, before the LLM starts, so the two never share the GPU (user rule 1 Nov 2026).
+    OUT.mkdir(parents=True, exist_ok=True)
+    use_embedding_cache(["embedding"])
+    cache = A._CACHE.setdefault(A.EMBED_MODEL, {})
+    todo = sorted(world_sentences() - set(cache))
+    A.OllamaEmbedding().transform(todo)
+    np.save(OUT / WORLD_EMBEDDINGS[0], np.vstack([cache[t] for t in todo]) if todo else np.empty((0, 1024), np.float32))
+    pd.DataFrame({"teks": todo}).to_parquet(OUT / WORLD_EMBEDDINGS[1])
+    return {"kalimat_baru": len(todo)}
+
+
+def assertion_world(heads: dict[str, str]) -> dict:
+    # T14 on the evaluated world's labelled sentences, read by the frozen reader trained on all DEV sentences, as for D1-D11.
+    use_embedding_cache(heads)
+    reader = A.AssertionReader.fit(assertion_data(), heads)
+    lab = pd.read_parquet(KEY / "key_sentences.parquet")
+    style = pd.read_parquet(KEY / "key_claims.parquet", columns=["nomor_sep", "gaya_tulis"]).set_index("nomor_sep").gaya_tulis
+    data = A.training_sentences(pd.read_parquet(WORLD / "rme_documents.parquet"), lab, style)
+    models = {"sebutan": reader.mention, "alat": reader.device, "asersi": reader.assertion}
+    out = {}
+    for head, model in models.items():
+        rows = data if head == "sebutan" else data[data.sebutan]
+        right = model.predict(rows.teks) == rows[head].to_numpy()
+        out[head] = {g: _per_class(rows[head][rows.gaya == g], right[(rows.gaya == g).to_numpy()]) for g in sorted(rows.gaya.dropna().unique())}
+    report = {"pembaca": heads, "kalimat": len(data), "per_gaya": out}
+    (OUT / "asersi_dunia_laporan.json").write_text(json.dumps(report, ensure_ascii=False, indent=1))
+    return report
 
 
 def assertion_data() -> pd.DataFrame:
@@ -238,11 +384,11 @@ def assertion_report(backends: tuple[str, ...] = ("ngram", "embedding")) -> dict
 
 
 def fast_layers() -> dict:
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k, h = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep"), w["key_hospitals"].set_index("kode_rs")
-    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
+    docs = pd.read_parquet(WORLD / "rme_documents.parquet")
     clones, trail = F.clone_scores(docs, c.kode_rs), F.write_trail(docs, c.tgl_pulang)
-    origin = F.provenance(clones, trail, pd.read_parquet(DEV / "dasar" / "rme_vitals.parquet"))
+    origin = F.provenance(clones, trail, pd.read_parquet(WORLD / "rme_vitals.parquet"))
     per = clones.join(trail).join(origin.add_suffix("_asal_usul").rename(columns={"kloning_kuat_asal_usul": "kloning_kuat",
                                                                                  "tulis_serentak_asal_usul": "tulis_serentak"}))
     per = per.join(k[["rme_versi", "jebakan"]]).assign(rs=c.kode_rs)
@@ -404,9 +550,9 @@ def late_thresholds() -> dict:
 
 def late_burden() -> dict:
     # The RS-level route is measured only to be reported; T12 does not use it (user decision 1 Nov 2026).
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k, h = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep"), w["key_hospitals"].set_index("kode_rs")
-    delays, z = late_population(c, k, pd.read_parquet(DEV / "dasar" / "rme_documents.parquet"))
+    delays, z = late_population(c, k, pd.read_parquet(WORLD / "rme_documents.parquet"))
     pop = k.index[k.populasi_garis.fillna(False)]
     held = F.late_key_documents(delays, z).ne("").reindex(pop, fill_value=False)
     x = pd.DataFrame({"ditahan": held, "lapis": truth(k.loc[pop]).lapis, "jebakan": h.jebakan.reindex(c.kode_rs.loc[pop]).to_numpy()})
@@ -430,7 +576,7 @@ RETRIES = OUT / "bacaan_llm_ulang.jsonl"
 def retry_readings(path: Path = READINGS) -> dict:
     # The same one retry read_claim makes, run only for stored readings whose quotes were not found verbatim.
     rows = [json.loads(line) for line in path.open()]
-    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
+    docs = pd.read_parquet(WORLD / "rme_documents.parquet")
     seps = [r["nomor_sep"] for r in rows if r["reading"] is not None]
     records = {s: B.assemble(d) for s, d in docs[docs.nomor_sep.isin(seps)].groupby("nomor_sep")}
     done = {json.loads(line)["nomor_sep"] for line in RETRIES.open()} if RETRIES.exists() else set()
@@ -449,11 +595,11 @@ def retry_readings(path: Path = READINGS) -> dict:
 def layered(heads: dict[str, str] | None = None, path: Path = READINGS) -> dict:
     heads = heads or dict.fromkeys(A.HEADS, "ngram")
     use_embedding_cache(heads)
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
     rows = {r["nomor_sep"]: r for r in map(json.loads, path.open())}
     seps = list(rows)
-    docs = pd.read_parquet(DEV / "dasar" / "rme_documents.parquet")
+    docs = pd.read_parquet(WORLD / "rme_documents.parquet")
     records = {s: B.assemble(d) for s, d in docs[docs.nomor_sep.isin(seps)].groupby("nomor_sep")}
     sheet = pd.read_parquet(OUT / "fisiologi_per_klaim.parquet").lembar
     # An explicit map: Series.replace("", None) pads the previous row's value into the gap instead of clearing it.
@@ -466,7 +612,8 @@ def layered(heads: dict[str, str] | None = None, path: Path = READINGS) -> dict:
     else:
         # The hospital-fold readers are the shared ones; a claim with no sentence reads "tidak_jelas", as ventilation() of an empty read does.
         by_rs = read_by_fold(heads, docs[docs.nomor_sep.isin(seps)], pd.Index(seps), c.kode_rs).reindex(seps).fillna("tidak_jelas")
-        second = {"rs": by_rs.to_dict(), "gaya": second_opinions(seps, records, k.gaya_tulis, heads)}
+        # Outside DEV no reader has seen these claims or their style, so the deployed hospital-fold readers serve both schemes.
+        second = {"rs": by_rs.to_dict(), "gaya": second_opinions(seps, records, k.gaya_tulis, heads) if is_dev() else by_rs.to_dict()}
         pd.DataFrame(second).to_parquet(cache)
     out = []
     for sep, r in rows.items():
@@ -507,7 +654,7 @@ def fold_readers(heads: dict[str, str]) -> tuple[dict[int, A.AssertionReader], d
     w = load_world(DEV / "dasar", with_key=True)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
     fold_of = dict(zip(c.kode_rs, pd.factorize(c.kode_rs)[0] % 5))
-    path = OUT / f"pembaca_lipat_rs_{'_'.join(heads[h] for h in A.HEADS)}.joblib"
+    path = DEV_OUT / f"pembaca_lipat_rs_{'_'.join(heads[h] for h in A.HEADS)}.joblib"
     if path.exists():
         return joblib.load(path), fold_of
     use_embedding_cache(heads)
@@ -539,9 +686,9 @@ def assertion_population(heads: dict[str, str]) -> pd.Series:
     if path.exists():
         return pd.read_parquet(path).ventilasi
     use_embedding_cache(heads)
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep")
-    series = read_by_fold(heads, pd.read_parquet(DEV / "dasar" / "rme_documents.parquet"), k.index[k.populasi_garis.fillna(False)], c.kode_rs)
+    series = read_by_fold(heads, pd.read_parquet(WORLD / "rme_documents.parquet"), k.index[k.populasi_garis.fillna(False)], c.kode_rs)
     series.to_frame().to_parquet(path)
     return series
 
@@ -602,7 +749,7 @@ def status_changes(tests: dict[str, dict[str, pd.DataFrame]], h: pd.DataFrame, h
 
 def rs_modes(heads: dict[str, str] | None = None) -> dict:
     heads = heads or dict.fromkeys(A.HEADS, "ngram")
-    w = load_world(DEV / "dasar", with_key=True)
+    w = load_world(WORLD, with_key=True, key=KEY)
     c, k, h = w["claims"].set_index("nomor_sep"), w["key_claims"].set_index("nomor_sep"), w["key_hospitals"].set_index("kode_rs")
     kw = pd.read_parquet(OUT / "kata_kunci_per_klaim.parquet")
     pop = kw.index
@@ -620,7 +767,7 @@ def rs_modes(heads: dict[str, str] | None = None) -> dict:
 
 def placebo_modes(heads: dict[str, str]) -> dict:
     # The fraud-free twin of DEV (same hospitals and patients, honest RME), read with the same layers; every RS it flags is a false alarm.
-    key = DEV / "dasar" / "key"
+    key = KEY
     c = pd.read_parquet(key / "key_placebo_claims.parquet").set_index("nomor_sep")
     pop = c.index[A1.in_line(c)]
     docs = pd.read_parquet(key / "key_placebo_rme_documents.parquet")
@@ -653,7 +800,15 @@ VARIANTS = {"llm": (None, False, False), "llm_asersi_rs": ("rs", False, False), 
             "llm_asersi_rs_fisiologi": ("rs", True, False), "semua_lapis_rs": ("rs", True, True), "semua_lapis_gaya": ("gaya", True, True)}
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["ulang_kutipan"]:
+    if sys.argv[1:2] == ["baca"]:
+        run(int(sys.argv[2]) if len(sys.argv) > 2 else None)
+    elif sys.argv[1:2] == ["uji_paralel"]:
+        print(json.dumps(parallel_check(int(sys.argv[2]) if len(sys.argv) > 2 else 20), ensure_ascii=False, indent=1))
+    elif sys.argv[1:2] == ["embed_dunia"]:
+        print(json.dumps(embed_world(), ensure_ascii=False))
+    elif sys.argv[1:2] == ["asersi_dunia"]:
+        print(json.dumps(assertion_world(dict(zip(A.HEADS, sys.argv[2:5]))), ensure_ascii=False, indent=1))
+    elif sys.argv[1:2] == ["ulang_kutipan"]:
         print(json.dumps(retry_readings(), ensure_ascii=False))
     elif sys.argv[1:2] == ["plasebo_modus"]:
         print(json.dumps(placebo_modes(dict(zip(A.HEADS, sys.argv[2:5]))), ensure_ascii=False, indent=1, default=str))
