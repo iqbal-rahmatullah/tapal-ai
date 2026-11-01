@@ -17,12 +17,14 @@ from engine.contracts import (
     GroupedClaim,
     RmeReading,
     RmeResult,
-    canonical_json,
     fingerprint,
     in_line_population,
     is_eligible_fictitious,
     is_eligible_prolonged,
+    append_decision,
     open_decision_log,
+    read_decisions,
+    verify_chain,
     validation_issues,
 )
 
@@ -122,35 +124,18 @@ def test_response_carries_model_version():
     assert r.versi_model == "tapal-1.0"
 
 
-def decision(sep, waktu):
-    return Decision(waktu=waktu, nomor_sep=sep, kode_rs="RS-092", keputusan="ajukan_audit",
-                    catatan="RME tidak mendukung kode 96.71", peran="verifikator", bukti={"peluang": 0.04})
-
-
-def append(conn, d):
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute("SELECT sidik FROM jejak_keputusan ORDER BY id DESC LIMIT 1").fetchone()
-        previous = row[0] if row else GENESIS
-        rec = d.model_dump(mode="json")
-        conn.execute(
-            "INSERT INTO jejak_keputusan (waktu, nomor_sep, kode_rs, keputusan, catatan, peran, versi_model, bukti, sidik_sebelum, sidik)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (rec["waktu"], rec["nomor_sep"], rec["kode_rs"], rec["keputusan"], rec["catatan"], rec["peran"],
-             rec["versi_model"], canonical_json(rec["bukti"]), previous, fingerprint(d, previous)),
-        )
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+def decision(sep, waktu, **changes):
+    return Decision(**{"waktu": waktu, "peran": "verifikator", "objek_jenis": "klaim", "objek_id": sep, "keputusan": "ajukan_audit",
+                       "catatan": "RME tidak mendukung kode 96.71", "dasar_ai": {"mesin": ["AI 1", "AI 2"], "sumber_bacaan": "llm_lokal"},
+                       "bukti": {"peluang": 0.04}, **changes})
 
 
 def test_decision_log_is_append_only_and_chained(tmp_path):
     conn = open_decision_log(tmp_path / "jejak.db")
     first = decision("SIN-092-25-00412", datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc))
     second = decision("SIN-092-25-00519", datetime(2026, 1, 5, 9, 5, tzinfo=timezone.utc))
-    append(conn, first)
-    append(conn, second)
+    append_decision(conn, first)
+    append_decision(conn, second)
 
     rows = conn.execute("SELECT sidik_sebelum, sidik FROM jejak_keputusan ORDER BY id").fetchall()
     assert rows[0] == (GENESIS, fingerprint(first, GENESIS))
@@ -159,14 +144,35 @@ def test_decision_log_is_append_only_and_chained(tmp_path):
     for sql in (
         "UPDATE jejak_keputusan SET catatan = 'diubah' WHERE id = 1",
         "DELETE FROM jejak_keputusan WHERE id = 1",
-        "INSERT OR REPLACE INTO jejak_keputusan (id, waktu, nomor_sep, kode_rs, keputusan, catatan, peran, versi_model, bukti, sidik_sebelum, sidik)"
-        " VALUES (1, 'x', 'x', 'x', 'setujui', 'x', 'verifikator', 'x', '{}', 'x', 'x')",
+        "INSERT OR REPLACE INTO jejak_keputusan (id, waktu, peran, objek_jenis, objek_id, keputusan, catatan, dasar_ai, versi_model, bukti,"
+        " sidik_sebelum, sidik) VALUES (1, 'x', 'verifikator', 'klaim', 'x', 'setujui', 'x', '{}', 'x', '{}', 'x', 'x')",
     ):
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(sql)
     assert conn.execute("SELECT count(*) FROM jejak_keputusan").fetchone()[0] == 2
+    assert verify_chain(read_decisions(conn)) is None
 
 
-def test_decision_time_needs_timezone():
+def test_correction_is_a_new_row_and_tampering_is_detected(tmp_path):
+    conn = open_decision_log(tmp_path / "jejak.db")
+    t = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+    append_decision(conn, decision("SIN-092-25-00412", t))
+    rid, _ = append_decision(conn, decision("SIN-092-25-00412", t, keputusan="koreksi", koreksi_untuk=1, catatan="menambah kutipan"))
+    assert rid == 2
+    with pytest.raises(ValueError):
+        append_decision(conn, decision("SIN-092-25-00412", t, keputusan="koreksi", koreksi_untuk=99))
+    rows = read_decisions(conn)
+    assert [r["catatan"] for r in rows] == ["RME tidak mendukung kode 96.71", "menambah kutipan"]
+    rows[0]["catatan"] = "diubah diam-diam"
+    assert verify_chain(rows) == 1
+
+
+def test_decision_rules():
+    t = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
     with pytest.raises(ValidationError):
         decision("X", datetime(2026, 1, 5, 9, 0))
+    with pytest.raises(ValidationError):
+        decision("X", t, catatan=" ")
+    with pytest.raises(ValidationError):
+        decision("X", t, keputusan="koreksi")
+    assert decision("Laporan Des 2025", t, objek_jenis="laporan", keputusan="setujui_laporan", catatan="", peran="kepala_cabang")

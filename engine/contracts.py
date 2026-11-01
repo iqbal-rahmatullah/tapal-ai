@@ -60,7 +60,10 @@ Device = Literal["ventilator_invasif", "niv", "hfnc", "nrm", "nasal_kanul", "uda
 CheckStatus = Literal["lolos_cepat", "periksa_manual", "didukung_rme"]
 RmeVerdict = Literal["mendukung", "tidak_mendukung", "tidak_dapat_disimpulkan"]
 Engine = Literal["Kode", "AI 1", "AI 2", "AI 3", "AI 4", "Statistik", "LLM"]
-DecisionKind = Literal["setujui", "ajukan_audit", "minta_klarifikasi"]
+DecisionKind = Literal["setujui", "minta_klarifikasi", "ajukan_audit", "masukkan_rencana_audit", "setujui_audit", "susun_laporan",
+                       "setujui_laporan", "kirim_laporan", "draf_surat", "aktifkan_garis", "tolak_garis", "koreksi"]
+Role = Literal["verifikator", "kepala_cabang", "admin"]
+ObjectKind = Literal["klaim", "rs", "laporan", "garis"]
 
 _ICD10 = r"^[A-Z][0-9]{2}(\.[0-9A-Z]{1,2})?$"
 _ICD9CM = r"^[0-9]{2}(\.[0-9]{1,2})?$"
@@ -276,7 +279,8 @@ class Step(_Strict):
 
 
 class RmeResult(_Strict):
-    status: Literal["diproses", "selesai"]
+    # "dilewati" when the claim is outside the ventilation-line population, so AI 2 has nothing to read.
+    status: Literal["diproses", "selesai", "dilewati"]
     hasil: str | None = None
     verdict: RmeVerdict | None = None
     sumber: Literal["llm_lokal", "aturan"] | None = None
@@ -297,6 +301,9 @@ class CheckResponse(_Strict):
     status_sebelumnya: CheckStatus | None = None
     peluang_didukung_bukti: float = Field(ge=0, le=1)
     alasan: list[str]
+    # Same reasons with direction and engine, so a screen can draw the arrows without parsing text.
+    alasan_rinci: list[dict[str, Any]] = []
+    peluang_panjang: float | None = Field(None, ge=0, le=1)
     selisih_tarif_dipertaruhkan: int
     rme: RmeResult
     versi_model: str = MODEL_VERSION
@@ -322,12 +329,15 @@ def validation_issues(error: ValidationError) -> list[ValidationIssue]:
 
 
 class Decision(_Strict):
+    # Field names follow the Layar 8 contract in the screen design (§7, Jejak keputusan).
     waktu: datetime
-    nomor_sep: str = Field(min_length=1)
-    kode_rs: str = Field(min_length=1)
+    peran: Role
+    objek_jenis: ObjectKind
+    objek_id: str = Field(min_length=1)
     keputusan: DecisionKind
-    catatan: str = Field(min_length=1)
-    peran: Literal["verifikator", "kepala_cabang"]
+    catatan: str = Field("", validate_default=True)
+    dasar_ai: dict[str, Any] = {}
+    koreksi_untuk: int | None = Field(None, ge=1, validate_default=True)
     versi_model: str = MODEL_VERSION
     bukti: dict[str, Any] = {}
 
@@ -338,6 +348,20 @@ class Decision(_Strict):
             raise ValueError("waktu wajib berzona waktu")
         return v.astimezone(timezone.utc)
 
+    @field_validator("catatan")
+    @classmethod
+    def _note_where_required(cls, v: str, info: ValidationInfo) -> str:
+        if info.data.get("objek_jenis") in ("klaim", "rs", "garis") and not v.strip():
+            raise ValueError("catatan wajib diisi untuk keputusan atas klaim, RS, atau garis")
+        return v
+
+    @field_validator("koreksi_untuk")
+    @classmethod
+    def _correction_names_its_row(cls, v: int | None, info: ValidationInfo) -> int | None:
+        if info.data.get("keputusan") == "koreksi" and v is None:
+            raise ValueError("koreksi wajib menyebut baris yang dikoreksi")
+        return v
+
 
 GENESIS = "0" * 64
 
@@ -345,11 +369,13 @@ DECISION_LOG_DDL = """
 CREATE TABLE IF NOT EXISTS jejak_keputusan (
     id INTEGER PRIMARY KEY,
     waktu TEXT NOT NULL,
-    nomor_sep TEXT NOT NULL,
-    kode_rs TEXT NOT NULL,
-    keputusan TEXT NOT NULL CHECK (keputusan IN ('setujui', 'ajukan_audit', 'minta_klarifikasi')),
-    catatan TEXT NOT NULL CHECK (length(catatan) > 0),
     peran TEXT NOT NULL,
+    objek_jenis TEXT NOT NULL CHECK (objek_jenis IN ('klaim', 'rs', 'laporan', 'garis')),
+    objek_id TEXT NOT NULL,
+    keputusan TEXT NOT NULL,
+    catatan TEXT NOT NULL,
+    dasar_ai TEXT NOT NULL,
+    koreksi_untuk INTEGER REFERENCES jejak_keputusan (id),
     versi_model TEXT NOT NULL,
     bukti TEXT NOT NULL,
     sidik_sebelum TEXT NOT NULL,
@@ -360,6 +386,8 @@ BEGIN SELECT RAISE(ABORT, 'jejak keputusan bersifat tambah-saja'); END;
 CREATE TRIGGER IF NOT EXISTS jejak_keputusan_tanpa_hapus BEFORE DELETE ON jejak_keputusan
 BEGIN SELECT RAISE(ABORT, 'jejak keputusan bersifat tambah-saja'); END;
 """
+
+_COLUMNS = ("waktu", "peran", "objek_jenis", "objek_id", "keputusan", "catatan", "dasar_ai", "koreksi_untuk", "versi_model", "bukti")
 
 
 def canonical_json(obj: Any) -> str:
@@ -374,8 +402,49 @@ def fingerprint(decision: Decision, previous: str) -> str:
 def open_decision_log(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, autocommit=True, timeout=5.0)
     conn.execute("PRAGMA recursive_triggers = ON")  # without it, INSERT OR REPLACE bypasses the DELETE trigger
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(DECISION_LOG_DDL)
     return conn
+
+
+def append_decision(conn: sqlite3.Connection, decision: Decision) -> tuple[int, str]:
+    # BEGIN IMMEDIATE takes the write lock before reading the last fingerprint, so two writers cannot fork the chain.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if decision.koreksi_untuk is not None and conn.execute("SELECT 1 FROM jejak_keputusan WHERE id = ?", (decision.koreksi_untuk,)).fetchone() is None:
+            raise ValueError(f"baris {decision.koreksi_untuk} yang dikoreksi tidak ada")
+        row = conn.execute("SELECT sidik FROM jejak_keputusan ORDER BY id DESC LIMIT 1").fetchone()
+        previous = row[0] if row else GENESIS
+        rec = decision.model_dump(mode="json")
+        values = [canonical_json(rec[c]) if c in ("dasar_ai", "bukti") else rec[c] for c in _COLUMNS]
+        sidik = fingerprint(decision, previous)
+        cur = conn.execute(f"INSERT INTO jejak_keputusan ({', '.join(_COLUMNS)}, sidik_sebelum, sidik) VALUES ({', '.join('?' * (len(_COLUMNS) + 2))})",
+                           (*values, previous, sidik))
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return int(cur.lastrowid), sidik
+
+
+def read_decisions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cols = ("id", *_COLUMNS, "sidik_sebelum", "sidik")
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM jejak_keputusan ORDER BY id").fetchall()
+    out = [dict(zip(cols, r)) for r in rows]
+    for r in out:
+        r["dasar_ai"], r["bukti"] = json.loads(r["dasar_ai"]), json.loads(r["bukti"])
+    return out
+
+
+def verify_chain(rows: list[dict[str, Any]]) -> int | None:
+    # Returns the id of the first row whose fingerprint no longer matches its content or its predecessor, or None when intact.
+    previous = GENESIS
+    for r in rows:
+        decision = Decision.model_validate({c: r[c] for c in _COLUMNS})
+        if r["sidik_sebelum"] != previous or fingerprint(decision, previous) != r["sidik"]:
+            return r["id"]
+        previous = r["sidik"]
+    return None
 
 
 def _matches(pattern: str, value: str) -> bool:
