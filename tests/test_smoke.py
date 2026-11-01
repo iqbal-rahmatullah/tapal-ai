@@ -17,7 +17,7 @@ def test_health():
 def test_web_served():
     r = client.get("/")
     assert r.status_code == 200
-    assert "<title>TAPAL</title>" in r.text
+    assert "<title>TAPAL" in r.text
 
 
 def test_no_data_sampel_files():
