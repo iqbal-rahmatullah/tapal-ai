@@ -261,7 +261,8 @@ class Episode(_Strict):
 
 
 class RmeReading(_Strict):  # its JSON schema is sent to Ollama as `format`
-    kutipan: list[Quote]
+    # The smoke test on DEV saw Gemma return no quotes at all, and up to 12 quotes taking 80 seconds.
+    kutipan: list[Quote] = Field(min_length=1, max_length=8)
     alat_napas_tertinggi: Device
     ventilasi_invasif: Literal["ya", "tidak", "tidak_jelas"]
     mode_ventilator: str
