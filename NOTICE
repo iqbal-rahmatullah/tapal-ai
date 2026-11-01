@@ -1,0 +1,13 @@
+TAPAL (Tariff Anomaly Probe Across Lines)
+Copyright 2026 Muhammad Iqbal Rahmatullah
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+The TAPAL name and logo are not covered by that license.
+
+The open ICU data (eICU Collaborative Research Database Demo and MIMIC-IV
+Clinical Database Demo, PhysioNet) are licensed under the Open Database
+License (ODbL) v1.0 and are not included in this repository. Tables and
+models derived from them keep that license.
+
+The bundled fonts Inter, JetBrains Mono, and Plus Jakarta Sans (via
+Fontsource) are licensed under the SIL Open Font License 1.1.
