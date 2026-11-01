@@ -1,0 +1,115 @@
+{
+ "dibuat": "2026-11-01T15:20:35+07:00",
+ "commit_git": "e3a69907cb7760b9b6b6a493dc21ee20bf4a3ecb",
+ "berkas_belum_commit": [
+  "M engine/contracts.py",
+  " M tests/test_contracts.py",
+  " M tests/test_smoke.py",
+  "?? tests/test_api.py"
+ ],
+ "kode_mesin": {
+  "engine/__init__.py": "0176bd28159f87268983671bc3db0edf818ecf3ab325c0bf1bc146ec073b3334",
+  "engine/ai1.py": "682f2eb75a5eeacb513a41300a2c4c1e48e5f0fcfd725da363f861d2901d3db4",
+  "engine/ai1_dev.py": "bd1899a1cfe0f9926bc1a149ed80b75466278111b50e818a6dbf1196c80c29c3",
+  "engine/ai2.py": "f3574cb72123698e217ded94fcef8e749b05dcc7577ba989ca179b766b9de9d3",
+  "engine/ai2_assertion.py": "2e04efac83e93594fa5bc173b68f56b1cc319e787f06131a1ae8c17e1d282297",
+  "engine/ai2_dev.py": "ecd5a7b1241a19aa17b8fab3f4b42e6fb1664950bee25fcb35653eb291347a24",
+  "engine/ai2_fast.py": "a066beefc590b54416b9be45d87e58d1a46bb8aefc3e6ed9254b22c48987b030",
+  "engine/ai2_physiology.py": "64dd870ef7e5f1efb4a5d57210e2444b0fd8cfa49bd1870f20ade5575a6bff91",
+  "engine/ai3.py": "bc17a37ffe7100e31a831735a728485f717b2b9d4b67331b5b6877df332a8205",
+  "engine/ai3_dev.py": "4a09ef8ada3e80e0d9799989354cff76d04bb40b6c28d1297b585c894a2ea2d9",
+  "engine/ai3_worlds.py": "13bc7def1573ce3128b9ecd2d127a23970cece3efd017cc51a1bcba88268f926",
+  "engine/ai4.py": "3d767efa719715ea37eaf61642358ce172aa804bc4c848df66a3917d0ce7d669",
+  "engine/ai4_dev.py": "871a0ce9b015170bc2a36173fa422960bd9a8f4b104849d93b7815dfb3306651",
+  "engine/ai4_reality.py": "5dbb4ae0805e6c52d0e4f7f2b26906d1937c55afc6b58138c573f9b2e3819e63",
+  "engine/contracts.py": "1a87a945fcb8fa0d4f4055204bf01cfdfddcbe1f1f1402e28efbd87fcb05c129",
+  "engine/data.py": "e40e8f852fe5349bbb0de706b288c7e2ec1987c76277eb37719052f418573f18",
+  "engine/line_config.py": "639b1d37bc6f6cdfbd41c1f969588a0abaaa4a0114b7d684e5fcbe1f69a81f58",
+  "engine/lines.py": "ba950db28df0a861897dfad57ebaeb0c35b0ce24f6d1eba7886074121a1e58e8",
+  "engine/lines_dev.py": "dc13573111f461758d618c9e093913dedc6eb8993adb9fe4cb6d807907a710b9",
+  "engine/narrative.py": "eb6bbef8becf9e180ba75b755434559f606fc4e0baa00d847ee3e28f78037a02",
+  "engine/reality.py": "e8bdfc9c837e59f5032a3474901cf44f6d6882ef01194d76f1ace8177227c88a",
+  "engine/run_all.py": "c2221ef3563356c68245902ac139b64f17c0d0c2368fa167dbc3b887f57868dd",
+  "engine/stats.py": "0f6e888547081ccdbbc2bcc635785b40bf68bcafa29ce88ba0b9f900875a2451",
+  "engine/synth/build.py": "84eed2ffcafa1116403b960ef11242532aa76c3990ce43f78566d1536ecb7319",
+  "engine/synth/calibration.py": "763d095b20602297751a4928f613ba2ffd605c814cdf8d4462b4ce8b93b3be75",
+  "engine/synth/checks.py": "92f26db84b39cde1d0250c5e8cb244826890a38f64455108d571decd4275a754",
+  "engine/synth/fraud.py": "c87401219af0ed71152a380a5acafd977894013b3bad68774d02e033762409bb",
+  "engine/synth/grouper.py": "9c9391825b51af214239aa93eb4874a47074db0cf8834ede7e173e9ba66681bd",
+  "engine/synth/icu_open.py": "a1c12fe891ddf5644ab7482deb68daaa3443b0ef1552f0138394e7f85cab547e",
+  "engine/synth/inacbg_tariff_permenkes_3_2023.tsv": "be7dae51dc3539f0e98c140501a9c937d6ea211bb9d00ee51354bb493c2df4b0",
+  "engine/synth/rme.py": "b74d23bcbf564c5ce26ed1d0e604615a43918d21b8dc5a379355dea8d70b772a",
+  "engine/synth/world.py": "72c5005124ead6fca0366fca59331b2a9fd8b2149ac515c73f4dad5a0d15a171"
+ },
+ "model": {
+  "models/ai1-tapal-1.0.joblib": "150a3331d65c8c9fcb1fad9daea2fb6bd167e6058d873ddc3ee8cb0166548679",
+  "models/ai1-tapal-1.0.json": "06e3ceb7dabd93520c7820e60a28df3221f75044da3a824f7ffb23502b36b69a",
+  "models/ai2-asersi-tapal-1.0.joblib": "d38b2148d00e04ec0112f9855e54a3971f4f557147baa8d4aa9955a988e718df",
+  "models/ai2-fisiologi-tapal-1.0.joblib": "eac933543d2690c205c90848ca7f24edc5c552f0555eb263e59f3ca578451f8a"
+ },
+ "artefak_dev_dipakai_saat_uji": {
+  "ai2-dev/pembaca_lipat_rs_embedding_embedding_ngram.joblib": "166ca5f4b85a786149b411b21f4fd39a15e140b5de9130dd6c12aca3b4a7e8d7",
+  "ai2-dev/embedding_kalimat_bge_m3.npy": "bc678a3df5338eaabbe7fcb2df5fb9ef1822e2ff055fdba008336ee19e989199",
+  "ai2-dev/embedding_kalimat_teks.parquet": "5373e677c5ad6bfba3295d3982e575b8a49fa3f1cce083561549c4553c9b21d8",
+  "ai2-dev/embedding_kalimat_lain_bge_m3.npy": "5b3e16be55adc7cc4039ec5014e368095d0c216011d5d95fa703ffbe1f377c65",
+  "ai2-dev/embedding_kalimat_lain_teks.parquet": "a471a76738e667547e5d9b9f867e3ec8c304da9182551f0c7889897d1c7c41e2",
+  "ai2-dev/bacaan_llm.jsonl": "4ac5a48edbdeefa8c8b91eb7080bd076ec72b77027c861f69b86e55cda4674f2",
+  "ai2-dev/bacaan_llm_ulang.jsonl": "ed2efcb253e9faf95d94e78bda746cc1e739ff30461bbfb787db5254b1d519cd",
+  "ai2-dev/verifikasi_bacaan_tersimpan.json": "e218c063a621ca2d14391ee1a6face6edc92e9704ca8be7fa8a9cd2a2d3ebab6",
+  "ai2-dev/jejak_waktu_rs_ambang.json": "392c9076d578e8b118319c7eaddac8663d9f19547ff9dff0e6a87c6564191a14"
+ },
+ "data_icu_terbuka": {
+  "data/icu_open/eicu_hourly.parquet": "d7d97499f5b796d0791f1eed8e4428b6a4f9a9a092dbddbbac56836e6a3c67f0",
+  "data/icu_open/mimic_episodes.parquet": "ecbe7f235ddc27c6ccf0bbb0342fd5d9de9814284f84c77be148a1b881b39222",
+  "data/icu_open/mimic_hourly.parquet": "a8c7f7b88976e5729e567f1176fa028def0689ab33cd21f1c510be1a412be457"
+ },
+ "llm": {
+  "model": "gemma4:e4b-it-qat",
+  "digest": "ee665637121887cf3befff38abbb1be4ee117c7db867d97a67e29049ecd7e15f",
+  "digest_beku": "ee665637121887cf3befff38abbb1be4ee117c7db867d97a67e29049ecd7e15f",
+  "embedding": "bge-m3:latest",
+  "digest_embedding": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+  "opsi": {
+   "temperature": 0,
+   "seed": 42,
+   "num_ctx": 8192
+  },
+  "think": false,
+  "format": "skema JSON RmeReading",
+  "sha256_prompt_skema_opsi": "6b97f7025dc4486d511fa4e8199dcc89cff23e97da45a4ac0e8573b8f60435ab",
+  "versi_ollama": "0.40.13",
+  "OLLAMA_NUM_PARALLEL": "2",
+  "slot_llama_server": [
+   "1",
+   "2"
+  ],
+  "permintaan_paralel_klien": 2,
+  "pembaruan_otomatis_ollama": "mati (auto_update_enabled = 0)"
+ },
+ "sampel_llm_uji": {
+  "strata": {
+   "jujur": 112,
+   "kelas_naik": 14,
+   "fiktif_biasa": 28,
+   "fiktif_cerdik_1": 28,
+   "karangan": 28,
+   "kloning": 28,
+   "massal": 28,
+   "diperpanjang": 19,
+   "intubasi_saja": 15
+  },
+  "jumlah": 300,
+  "seed": 0,
+  "gaya": "bergiliran per gaya tulisan"
+ },
+ "pustaka": {
+  "python": "3.12.2",
+  "numpy": "2.1.3",
+  "pandas": "3.0.2",
+  "scikit-learn": "1.8.0",
+  "scipy": "1.17.1",
+  "httpx": "0.28.1",
+  "joblib": "1.5.3",
+  "pydantic": "2.12.5"
+ }
+}
